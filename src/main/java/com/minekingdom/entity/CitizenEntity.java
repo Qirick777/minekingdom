@@ -91,9 +91,10 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     public static AttributeSupplier.Builder createAttributes() {
         return PathfinderMob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 20.0D)
-                // Measured in game: ground speed lands near (attribute x goal modifier) x 19
-                // blocks per second, so strolling at 0.225 matches a walking player's 4.3.
-                .add(Attributes.MOVEMENT_SPEED, 0.25D)
+                // Timed over open ground at two settings: ground speed is not linear in the
+                // attribute but close to 42.6 x (attribute x goal modifier) squared blocks per
+                // second. Strolling at 0.315 gives 4.2, about a walking player's 4.3.
+                .add(Attributes.MOVEMENT_SPEED, 0.35D)
                 .add(Attributes.FOLLOW_RANGE, 32.0D)
                 // Not part of createMobAttributes; without it retaliation cannot deal damage.
                 // A held weapon adds its own modifier on top of this.
@@ -103,11 +104,11 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     @Override
     protected void registerGoals() {
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.2D, true));
+        this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, true));
         this.goalSelector.addGoal(2, new OpenDoorGoal(this, true));
         this.goalSelector.addGoal(3, new CitizenReturnGoal(this, 1.0D));
         // Sits above strolling: when it finds nothing to mine it stands down and the citizen wanders.
-        this.goalSelector.addGoal(4, new CitizenMiningGoal(this, 1.0D));
+        this.goalSelector.addGoal(4, new CitizenMiningGoal(this, 0.9D));
         this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.9D));
         this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8.0F));
         this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
