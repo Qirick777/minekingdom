@@ -5,8 +5,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
+import net.minecraft.util.TimeUtil;
+import net.minecraft.util.valueproviders.UniformInt;
 import net.minecraft.world.DifficultyInstance;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -14,17 +17,21 @@ import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.MobSpawnType;
+import net.minecraft.world.entity.NeutralMob;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.SpawnGroupData;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
+import net.minecraft.world.entity.ai.goal.MeleeAttackGoal;
 import net.minecraft.world.entity.ai.goal.OpenDoorGoal;
-import net.minecraft.world.entity.ai.goal.PanicGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
+import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
+import net.minecraft.world.entity.ai.goal.target.ResetUniversalAngerTargetGoal;
 import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.InventoryCarrier;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
@@ -33,44 +40,109 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ServerLevelAccessor;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.UUID;
+
 /**
  * A villager-like citizen that uses the player model. Spawns randomly as
  * male (classic/Steve model) or female (slim/Alex model), and carries an
  * eight slot inventory whose selected slot is mirrored into the main hand
  * so it renders like a held player item.
+ *
+ * <p>Citizens are neutral: they never flee, but fight back whatever hurts
+ * them and stay angry for a while afterwards.
  */
-public class CitizenEntity extends PathfinderMob implements InventoryCarrier {
+public class CitizenEntity extends PathfinderMob implements InventoryCarrier, NeutralMob {
     public static final int INVENTORY_SIZE = 8;
 
     private static final EntityDataAccessor<Boolean> DATA_FEMALE =
             SynchedEntityData.defineId(CitizenEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final UniformInt PERSISTENT_ANGER_TIME = TimeUtil.rangeOfSeconds(20, 39);
 
     private final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
     private int selectedSlot;
+    private int remainingPersistentAngerTime;
+    @Nullable
+    private UUID persistentAngerTarget;
 
     public CitizenEntity(EntityType<? extends CitizenEntity> type, Level level) {
         super(type, level);
         ((GroundPathNavigation) this.getNavigation()).setCanOpenDoors(true);
         // The main hand only mirrors the inventory, so the inventory alone handles drops.
         this.setDropChance(EquipmentSlot.MAINHAND, 0.0F);
+        this.setCanPickUpLoot(true);
         this.inventory.addListener(container -> this.updateHeldItem());
     }
 
     public static AttributeSupplier.Builder createAttributes() {
         return PathfinderMob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 20.0D)
-                .add(Attributes.MOVEMENT_SPEED, 0.3D)
-                .add(Attributes.FOLLOW_RANGE, 32.0D);
+                .add(Attributes.MOVEMENT_SPEED, 0.5D)
+                .add(Attributes.FOLLOW_RANGE, 32.0D)
+                // Not part of createMobAttributes; without it retaliation cannot deal damage.
+                // A held weapon adds its own modifier on top of this.
+                .add(Attributes.ATTACK_DAMAGE, 2.0D);
     }
 
     @Override
     protected void registerGoals() {
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new PanicGoal(this, 1.3D));
+        this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, true));
         this.goalSelector.addGoal(2, new OpenDoorGoal(this, true));
-        this.goalSelector.addGoal(3, new WaterAvoidingRandomStrollGoal(this, 0.6D));
+        this.goalSelector.addGoal(3, new WaterAvoidingRandomStrollGoal(this, 0.65D));
         this.goalSelector.addGoal(4, new LookAtPlayerGoal(this, Player.class, 8.0F));
         this.goalSelector.addGoal(5, new RandomLookAroundGoal(this));
+
+        this.targetSelector.addGoal(1, new HurtByTargetGoal(this).setAlertOthers());
+        this.targetSelector.addGoal(2, new ResetUniversalAngerTargetGoal<>(this, true));
+    }
+
+    @Override
+    protected void customServerAiStep() {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            this.updatePersistentAnger(serverLevel, true);
+        }
+        super.customServerAiStep();
+    }
+
+    @Override
+    public int getRemainingPersistentAngerTime() {
+        return this.remainingPersistentAngerTime;
+    }
+
+    @Override
+    public void setRemainingPersistentAngerTime(int time) {
+        this.remainingPersistentAngerTime = time;
+    }
+
+    @Nullable
+    @Override
+    public UUID getPersistentAngerTarget() {
+        return this.persistentAngerTarget;
+    }
+
+    @Override
+    public void setPersistentAngerTarget(@Nullable UUID target) {
+        this.persistentAngerTarget = target;
+    }
+
+    @Override
+    public void startPersistentAngerTimer() {
+        this.setRemainingPersistentAngerTime(PERSISTENT_ANGER_TIME.sample(this.random));
+    }
+
+    /**
+     * Only takes what fits, and only from items already within reach. There is no
+     * goal steering towards dropped items, so citizens pick things up by walking
+     * over them rather than being pulled to them.
+     */
+    @Override
+    public boolean wantsToPickUp(ItemStack stack) {
+        return this.inventory.canAddItem(stack);
+    }
+
+    @Override
+    protected void pickUpItem(ItemEntity itemEntity) {
+        InventoryCarrier.pickUpItem(this, this, itemEntity);
     }
 
     @Override
@@ -251,6 +323,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier {
         tag.putBoolean("Female", this.isFemale());
         tag.putByte("SelectedSlot", (byte) this.selectedSlot);
         this.writeInventoryToTag(tag);
+        this.addPersistentAngerSaveData(tag);
     }
 
     @Override
@@ -259,5 +332,6 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier {
         this.setFemale(tag.getBoolean("Female"));
         this.readInventoryFromTag(tag);
         this.setSelectedSlot(tag.getByte("SelectedSlot"));
+        this.readPersistentAngerSaveData(this.level(), tag);
     }
 }
