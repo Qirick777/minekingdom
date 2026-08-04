@@ -46,7 +46,11 @@ public final class CTestCommand {
                         .then(Commands.literal("start")
                                 .executes(context -> assign(context, CitizenTask.MINING)))
                         .then(Commands.literal("stop")
-                                .executes(context -> assign(context, CitizenTask.IDLE))))
+                                .executes(context -> assign(context, CitizenTask.IDLE)))
+                        .then(Commands.literal("report")
+                                .executes(CTestCommand::minedReport))
+                        .then(Commands.literal("reset")
+                                .executes(CTestCommand::resetMined)))
                 .then(Commands.literal("home")
                         .then(Commands.literal("set")
                                 .executes(CTestCommand::setHome))
@@ -81,6 +85,47 @@ public final class CTestCommand {
         } else {
             source.sendSuccess(() -> Component.translatable("commands.minekingdom.ctest.select.success", count), false);
         }
+        return count;
+    }
+
+    /** Prints how many blocks each selected citizen has mined, so idle ones stand out. */
+    private static int minedReport(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+
+        int total = 0;
+        int idle = 0;
+        for (CitizenEntity citizen : citizens) {
+            int mined = citizen.getMinedBlocks();
+            total += mined;
+            if (mined == 0) {
+                idle++;
+            }
+            String line = String.format("mined=%d task=%s pos=%.1f,%.1f,%.1f",
+                    mined, citizen.getTask().getSerializedName(), citizen.getX(), citizen.getY(), citizen.getZ());
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+
+        String summary = String.format("MINED_SUMMARY total=%d citizens=%d mined_none=%d",
+                total, citizens.size(), idle);
+        source.sendSuccess(() -> Component.literal(summary), false);
+        return total;
+    }
+
+    private static int resetMined(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+        citizens.forEach(CitizenEntity::resetMinedBlocks);
+        int count = citizens.size();
+        source.sendSuccess(() -> Component.literal("Reset mined counter for " + count + " citizen(s)."), false);
         return count;
     }
 

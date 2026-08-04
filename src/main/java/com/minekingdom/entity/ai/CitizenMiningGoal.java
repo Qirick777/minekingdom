@@ -170,7 +170,9 @@ public class CitizenMiningGoal extends Goal {
 
         if (this.destroyProgress >= 1.0F) {
             this.clearBreakProgress();
-            level.destroyBlock(target, true, this.citizen, 512);
+            if (level.destroyBlock(target, true, this.citizen, 512)) {
+                this.citizen.recordMinedBlock();
+            }
             this.targetBlock = null;
             this.standSpot = null;
             this.skipTarget = null;

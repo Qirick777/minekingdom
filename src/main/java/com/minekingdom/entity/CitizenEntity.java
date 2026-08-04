@@ -74,6 +74,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private CitizenTask task = CitizenTask.IDLE;
     @Nullable
     private BlockPos returnPoint;
+    private int minedBlocks;
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -90,7 +91,9 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     public static AttributeSupplier.Builder createAttributes() {
         return PathfinderMob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 20.0D)
-                .add(Attributes.MOVEMENT_SPEED, 0.5D)
+                // Measured in game: ground speed lands near (attribute x goal modifier) x 19
+                // blocks per second, so strolling at 0.225 matches a walking player's 4.3.
+                .add(Attributes.MOVEMENT_SPEED, 0.25D)
                 .add(Attributes.FOLLOW_RANGE, 32.0D)
                 // Not part of createMobAttributes; without it retaliation cannot deal damage.
                 // A held weapon adds its own modifier on top of this.
@@ -100,12 +103,12 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     @Override
     protected void registerGoals() {
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, true));
+        this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.2D, true));
         this.goalSelector.addGoal(2, new OpenDoorGoal(this, true));
-        this.goalSelector.addGoal(3, new CitizenReturnGoal(this, 0.9D));
+        this.goalSelector.addGoal(3, new CitizenReturnGoal(this, 1.0D));
         // Sits above strolling: when it finds nothing to mine it stands down and the citizen wanders.
-        this.goalSelector.addGoal(4, new CitizenMiningGoal(this, 0.8D));
-        this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.65D));
+        this.goalSelector.addGoal(4, new CitizenMiningGoal(this, 1.0D));
+        this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.9D));
         this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8.0F));
         this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
 
@@ -161,6 +164,19 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
 
     public boolean isMining() {
         return this.task == CitizenTask.MINING;
+    }
+
+    /** How many blocks this citizen has mined, for checking nobody is standing around idle. */
+    public int getMinedBlocks() {
+        return this.minedBlocks;
+    }
+
+    public void recordMinedBlock() {
+        this.minedBlocks++;
+    }
+
+    public void resetMinedBlocks() {
+        this.minedBlocks = 0;
     }
 
     @Nullable
@@ -420,6 +436,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.writeInventoryToTag(tag);
         this.addPersistentAngerSaveData(tag);
         tag.putString("Task", this.task.getSerializedName());
+        tag.putInt("MinedBlocks", this.minedBlocks);
         if (this.returnPoint != null) {
             tag.put("ReturnPoint", NbtUtils.writeBlockPos(this.returnPoint));
         }
@@ -433,6 +450,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.setSelectedSlot(tag.getByte("SelectedSlot"));
         this.readPersistentAngerSaveData(this.level(), tag);
         this.setTask(CitizenTask.byName(tag.getString("Task")));
+        this.minedBlocks = tag.getInt("MinedBlocks");
         this.setReturnPoint(tag.contains("ReturnPoint") ? NbtUtils.readBlockPos(tag.getCompound("ReturnPoint")) : null);
     }
 }

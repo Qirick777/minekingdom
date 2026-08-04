@@ -23,6 +23,8 @@ JAVA_HOME=/path/to/jdk-17 ./gradlew runClient
   - 남성: 클래식(스티브) 모델 + 스티브 스킨
   - 여성: 슬림(알렉스) 모델 + 알렉스 스킨
 - 배회, 문 열기, 물에 뜨기, 플레이어 쳐다보기 AI를 가지며 길찾기로 이동합니다.
+- 걷는 속도는 플레이어와 비슷한 초당 약 4.3블록입니다. 지상 이동 속도는 실측상
+  `(이동속도 특성 × goal 속도 계수) × 약 19` blocks/s로 나옵니다.
 - 멀리 떨어져도 디스폰되지 않습니다.
 
 ### 중립 몹
@@ -63,6 +65,8 @@ JAVA_HOME=/path/to/jdk-17 ./gradlew runClient
 | `/ctest select [범위] [n]` | 명령 위치 기준 범위 안의 가까운 시민 n명을 선택 (기본 범위 16, n 제한 없음) |
 | `/ctest mining start` | 선택한 시민이 채굴 시작 |
 | `/ctest mining stop` | 선택한 시민이 채굴 중지 |
+| `/ctest mining report` | 시민별 채굴한 블록 수와 합계 출력 (노는 시민 확인용) |
+| `/ctest mining reset` | 채굴 카운터 초기화 |
 | `/ctest home set` | 선택한 시민의 현위치를 복귀지점으로 기록 |
 | `/ctest home return` | 선택한 시민을 복귀지점으로 복귀시킴 |
 | `/ctest home report` | 선택한 시민의 복귀지점까지 거리와 도착 여부 집계 |
