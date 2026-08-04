@@ -1,4 +1,9 @@
 {
   "entity.minekingdom.citizen": "Citizen",
-  "item.minekingdom.citizen_spawn_egg": "Citizen Spawn Egg"
+  "item.minekingdom.citizen_spawn_egg": "Citizen Spawn Egg",
+  "message.minekingdom.citizen.inventory": "Citizen inventory %s/%s - holding: %s",
+  "message.minekingdom.citizen.inventory_full": "This citizen's inventory is full.",
+  "message.minekingdom.citizen.empty": "This citizen is carrying nothing.",
+  "message.minekingdom.citizen.returned": "Took back everything the citizen was carrying.",
+  "message.minekingdom.citizen.nothing_held": "nothing"
 }

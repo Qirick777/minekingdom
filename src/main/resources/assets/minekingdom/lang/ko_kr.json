@@ -1,4 +1,9 @@
 {
   "entity.minekingdom.citizen": "시민",
-  "item.minekingdom.citizen_spawn_egg": "시민 생성 알"
+  "item.minekingdom.citizen_spawn_egg": "시민 생성 알",
+  "message.minekingdom.citizen.inventory": "시민 인벤토리 %s/%s - 들고 있음: %s",
+  "message.minekingdom.citizen.inventory_full": "이 시민의 인벤토리가 가득 찼습니다.",
+  "message.minekingdom.citizen.empty": "이 시민은 아무것도 가지고 있지 않습니다.",
+  "message.minekingdom.citizen.returned": "시민이 가지고 있던 물건을 모두 돌려받았습니다.",
+  "message.minekingdom.citizen.nothing_held": "없음"
 }
