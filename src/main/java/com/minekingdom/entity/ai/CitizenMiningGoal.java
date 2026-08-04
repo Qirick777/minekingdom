@@ -287,7 +287,12 @@ public class CitizenMiningGoal extends Goal {
         return this.citizen.level().getBlockState(pos.above()).getBlock() instanceof FallingBlock;
     }
 
-    /** Standing positions beside the block, level with it or one below so it sits at head height. */
+    /**
+     * Standing positions beside the block: level with it, one below so it sits at head
+     * height, or one above so a citizen on top of a flat expanse can open it up beside
+     * itself. Without that last case a citizen standing on a stone plain has nothing it
+     * is allowed to mine, since everything at its own level is under its feet.
+     */
     @Nullable
     private BlockPos findStandSpot(BlockPos target, Set<BlockPos> reachable) {
         BlockPos best = null;
@@ -295,7 +300,7 @@ public class CitizenMiningGoal extends Goal {
         BlockPos origin = this.citizen.blockPosition();
 
         for (Direction direction : Direction.Plane.HORIZONTAL) {
-            for (int dy = 0; dy >= -1; dy--) {
+            for (int dy : new int[]{0, -1, 1}) {
                 BlockPos spot = target.relative(direction).above(dy);
                 if (!reachable.contains(spot)) {
                     continue;
