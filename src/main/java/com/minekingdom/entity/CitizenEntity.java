@@ -103,9 +103,24 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier {
 
     /** Copies the selected inventory slot into the main hand so it renders and syncs to clients. */
     private void updateHeldItem() {
-        if (!this.level().isClientSide) {
-            this.setItemSlot(EquipmentSlot.MAINHAND, this.inventory.getItem(this.selectedSlot).copy());
+        if (this.level().isClientSide) {
+            return;
         }
+        // Saving drops empty slots, so a reload packs items towards the front and the
+        // remembered slot can land on a gap. Fall back rather than appear empty-handed.
+        if (this.inventory.getItem(this.selectedSlot).isEmpty()) {
+            this.selectedSlot = this.firstOccupiedSlot();
+        }
+        this.setItemSlot(EquipmentSlot.MAINHAND, this.inventory.getItem(this.selectedSlot).copy());
+    }
+
+    private int firstOccupiedSlot() {
+        for (int i = 0; i < this.inventory.getContainerSize(); i++) {
+            if (!this.inventory.getItem(i).isEmpty()) {
+                return i;
+            }
+        }
+        return 0;
     }
 
     public int getOccupiedSlots() {
