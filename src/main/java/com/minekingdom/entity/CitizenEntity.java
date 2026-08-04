@@ -1,5 +1,8 @@
 package com.minekingdom.entity;
 
+import com.minekingdom.entity.ai.CitizenMiningGoal;
+import com.minekingdom.entity.task.CitizenTask;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
@@ -38,9 +41,11 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ServerLevelAccessor;
+import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * A villager-like citizen that uses the player model. Spawns randomly as
@@ -57,9 +62,11 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private static final EntityDataAccessor<Boolean> DATA_FEMALE =
             SynchedEntityData.defineId(CitizenEntity.class, EntityDataSerializers.BOOLEAN);
     private static final UniformInt PERSISTENT_ANGER_TIME = TimeUtil.rangeOfSeconds(20, 39);
+    private static final float BARE_HAND_DIG_SPEED = 1.0F;
 
     private final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
     private int selectedSlot;
+    private CitizenTask task = CitizenTask.IDLE;
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -88,9 +95,11 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.goalSelector.addGoal(0, new FloatGoal(this));
         this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, true));
         this.goalSelector.addGoal(2, new OpenDoorGoal(this, true));
-        this.goalSelector.addGoal(3, new WaterAvoidingRandomStrollGoal(this, 0.65D));
-        this.goalSelector.addGoal(4, new LookAtPlayerGoal(this, Player.class, 8.0F));
-        this.goalSelector.addGoal(5, new RandomLookAroundGoal(this));
+        // Sits above strolling: when it finds nothing to mine it stands down and the citizen wanders.
+        this.goalSelector.addGoal(3, new CitizenMiningGoal(this, 0.8D));
+        this.goalSelector.addGoal(4, new WaterAvoidingRandomStrollGoal(this, 0.65D));
+        this.goalSelector.addGoal(5, new LookAtPlayerGoal(this, Player.class, 8.0F));
+        this.goalSelector.addGoal(6, new RandomLookAroundGoal(this));
 
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this).setAlertOthers());
         this.targetSelector.addGoal(2, new ResetUniversalAngerTargetGoal<>(this, true));
@@ -128,6 +137,45 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     @Override
     public void startPersistentAngerTimer() {
         this.setRemainingPersistentAngerTime(PERSISTENT_ANGER_TIME.sample(this.random));
+    }
+
+    public CitizenTask getTask() {
+        return this.task;
+    }
+
+    /**
+     * The single entry point for putting a citizen to work. Commands use it today;
+     * jobs, workplace blocks or anything else can drive citizens the same way.
+     */
+    public void setTask(CitizenTask task) {
+        this.task = task;
+    }
+
+    public boolean isMining() {
+        return this.task == CitizenTask.MINING;
+    }
+
+    /** Which AI goals currently hold this citizen, for {@code /ctest debug}. */
+    public String describeRunningGoals() {
+        return this.goalSelector.getRunningGoals()
+                .map(wrapped -> wrapped.getPriority() + ":" + wrapped.getGoal().getClass().getSimpleName())
+                .collect(Collectors.joining(", "));
+    }
+
+    /**
+     * How much of a block a citizen breaks per tick, as a fraction of the whole.
+     * Citizens currently mine bare handed at the rate a suitable tool would give;
+     * once they carry pickaxes, the held tool's speed and harvest level hook in here.
+     */
+    public float getDestroyProgressPerTick(BlockState state, BlockPos pos) {
+        float hardness = state.getDestroySpeed(this.level(), pos);
+        if (hardness < 0.0F) {
+            return 0.0F;
+        }
+        if (hardness == 0.0F) {
+            return 1.0F;
+        }
+        return BARE_HAND_DIG_SPEED / hardness / 30.0F;
     }
 
     /**
@@ -324,6 +372,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         tag.putByte("SelectedSlot", (byte) this.selectedSlot);
         this.writeInventoryToTag(tag);
         this.addPersistentAngerSaveData(tag);
+        tag.putString("Task", this.task.getSerializedName());
     }
 
     @Override
@@ -333,5 +382,6 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.readInventoryFromTag(tag);
         this.setSelectedSlot(tag.getByte("SelectedSlot"));
         this.readPersistentAngerSaveData(this.level(), tag);
+        this.setTask(CitizenTask.byName(tag.getString("Task")));
     }
 }

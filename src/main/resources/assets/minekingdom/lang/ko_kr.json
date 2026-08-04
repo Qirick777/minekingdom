@@ -5,5 +5,10 @@
   "message.minekingdom.citizen.inventory_full": "이 시민의 인벤토리가 가득 찼습니다.",
   "message.minekingdom.citizen.empty": "이 시민은 아무것도 가지고 있지 않습니다.",
   "message.minekingdom.citizen.returned": "시민이 가지고 있던 물건을 모두 돌려받았습니다.",
-  "message.minekingdom.citizen.nothing_held": "없음"
+  "message.minekingdom.citizen.nothing_held": "없음",
+  "commands.minekingdom.ctest.select.success": "시민 %s명을 선택했습니다.",
+  "commands.minekingdom.ctest.select.none": "범위 안에 시민이 없습니다.",
+  "commands.minekingdom.ctest.no_selection": "선택된 시민이 없습니다. 먼저 /ctest select를 실행하세요.",
+  "commands.minekingdom.ctest.mining.start": "시민 %s명이 채굴을 시작했습니다.",
+  "commands.minekingdom.ctest.mining.stop": "시민 %s명이 채굴을 멈췄습니다."
 }

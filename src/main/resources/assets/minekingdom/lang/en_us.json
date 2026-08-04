@@ -5,5 +5,10 @@
   "message.minekingdom.citizen.inventory_full": "This citizen's inventory is full.",
   "message.minekingdom.citizen.empty": "This citizen is carrying nothing.",
   "message.minekingdom.citizen.returned": "Took back everything the citizen was carrying.",
-  "message.minekingdom.citizen.nothing_held": "nothing"
+  "message.minekingdom.citizen.nothing_held": "nothing",
+  "commands.minekingdom.ctest.select.success": "Selected %s citizen(s).",
+  "commands.minekingdom.ctest.select.none": "No citizens found in range.",
+  "commands.minekingdom.ctest.no_selection": "No citizens selected. Run /ctest select first.",
+  "commands.minekingdom.ctest.mining.start": "%s citizen(s) started mining.",
+  "commands.minekingdom.ctest.mining.stop": "%s citizen(s) stopped mining."
 }
