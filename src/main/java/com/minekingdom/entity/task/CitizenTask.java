@@ -12,7 +12,8 @@ import net.minecraft.util.StringRepresentable;
  */
 public enum CitizenTask implements StringRepresentable {
     IDLE("idle"),
-    MINING("mining");
+    MINING("mining"),
+    RETURNING("returning");
 
     private final String name;
 

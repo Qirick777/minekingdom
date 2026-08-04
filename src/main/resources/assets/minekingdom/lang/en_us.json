@@ -10,5 +10,7 @@
   "commands.minekingdom.ctest.select.none": "No citizens found in range.",
   "commands.minekingdom.ctest.no_selection": "No citizens selected. Run /ctest select first.",
   "commands.minekingdom.ctest.mining.start": "%s citizen(s) started mining.",
-  "commands.minekingdom.ctest.mining.stop": "%s citizen(s) stopped mining."
+  "commands.minekingdom.ctest.mining.stop": "%s citizen(s) stopped mining.",
+  "commands.minekingdom.ctest.home.set": "Recorded a return point for %s citizen(s).",
+  "commands.minekingdom.ctest.home.return": "%s citizen(s) heading back to their return point."
 }

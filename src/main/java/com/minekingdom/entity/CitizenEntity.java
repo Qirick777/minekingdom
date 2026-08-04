@@ -1,9 +1,12 @@
 package com.minekingdom.entity;
 
+import com.minekingdom.MineKingdom;
 import com.minekingdom.entity.ai.CitizenMiningGoal;
+import com.minekingdom.entity.ai.CitizenReturnGoal;
 import com.minekingdom.entity.task.CitizenTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtUtils;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -63,10 +66,14 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
             SynchedEntityData.defineId(CitizenEntity.class, EntityDataSerializers.BOOLEAN);
     private static final UniformInt PERSISTENT_ANGER_TIME = TimeUtil.rangeOfSeconds(20, 39);
     private static final float BARE_HAND_DIG_SPEED = 1.0F;
+    /** How close a citizen has to get before a return counts as made. */
+    public static final double RETURN_ARRIVAL_DISTANCE = 1.5D;
 
     private final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
     private int selectedSlot;
     private CitizenTask task = CitizenTask.IDLE;
+    @Nullable
+    private BlockPos returnPoint;
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -95,11 +102,12 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.goalSelector.addGoal(0, new FloatGoal(this));
         this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, true));
         this.goalSelector.addGoal(2, new OpenDoorGoal(this, true));
+        this.goalSelector.addGoal(3, new CitizenReturnGoal(this, 0.9D));
         // Sits above strolling: when it finds nothing to mine it stands down and the citizen wanders.
-        this.goalSelector.addGoal(3, new CitizenMiningGoal(this, 0.8D));
-        this.goalSelector.addGoal(4, new WaterAvoidingRandomStrollGoal(this, 0.65D));
-        this.goalSelector.addGoal(5, new LookAtPlayerGoal(this, Player.class, 8.0F));
-        this.goalSelector.addGoal(6, new RandomLookAroundGoal(this));
+        this.goalSelector.addGoal(4, new CitizenMiningGoal(this, 0.8D));
+        this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.65D));
+        this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8.0F));
+        this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
 
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this).setAlertOthers());
         this.targetSelector.addGoal(2, new ResetUniversalAngerTargetGoal<>(this, true));
@@ -153,6 +161,45 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
 
     public boolean isMining() {
         return this.task == CitizenTask.MINING;
+    }
+
+    @Nullable
+    public BlockPos getReturnPoint() {
+        return this.returnPoint;
+    }
+
+    /** Records where this citizen should be able to walk back to. */
+    public void setReturnPoint(@Nullable BlockPos pos) {
+        this.returnPoint = pos == null ? null : pos.immutable();
+    }
+
+    public boolean isAtReturnPoint() {
+        return this.distanceToReturnPoint() <= RETURN_ARRIVAL_DISTANCE;
+    }
+
+    /** Distance to the return point, or {@link Double#NaN} when none is recorded. */
+    public double distanceToReturnPoint() {
+        BlockPos home = this.returnPoint;
+        if (home == null) {
+            return Double.NaN;
+        }
+        return Math.sqrt(this.distanceToSqr(home.getX() + 0.5D, home.getY(), home.getZ() + 0.5D));
+    }
+
+    /**
+     * Ends a return trip and logs the outcome. The distance the citizen set out from is
+     * included so a log line shows on its own whether a walk actually happened.
+     */
+    public void finishReturn(boolean arrived, int ticks, double startDistance) {
+        this.setTask(CitizenTask.IDLE);
+        if (arrived) {
+            MineKingdom.LOGGER.info("Citizen {} returned to {} after {} ticks, having set out {} blocks away",
+                    this.getStringUUID(), this.returnPoint, ticks, String.format("%.2f", startDistance));
+        } else {
+            MineKingdom.LOGGER.info("Citizen {} gave up returning to {} after {} ticks, {} blocks short of it (set out {} blocks away)",
+                    this.getStringUUID(), this.returnPoint, ticks,
+                    String.format("%.2f", this.distanceToReturnPoint()), String.format("%.2f", startDistance));
+        }
     }
 
     /** Which AI goals currently hold this citizen, for {@code /ctest debug}. */
@@ -373,6 +420,9 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.writeInventoryToTag(tag);
         this.addPersistentAngerSaveData(tag);
         tag.putString("Task", this.task.getSerializedName());
+        if (this.returnPoint != null) {
+            tag.put("ReturnPoint", NbtUtils.writeBlockPos(this.returnPoint));
+        }
     }
 
     @Override
@@ -383,5 +433,6 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.setSelectedSlot(tag.getByte("SelectedSlot"));
         this.readPersistentAngerSaveData(this.level(), tag);
         this.setTask(CitizenTask.byName(tag.getString("Task")));
+        this.setReturnPoint(tag.contains("ReturnPoint") ? NbtUtils.readBlockPos(tag.getCompound("ReturnPoint")) : null);
     }
 }

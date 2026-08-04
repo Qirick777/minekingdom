@@ -63,7 +63,14 @@ JAVA_HOME=/path/to/jdk-17 ./gradlew runClient
 | `/ctest select [범위] [n]` | 명령 위치 기준 범위 안의 가까운 시민 n명을 선택 (기본 범위 16, n 제한 없음) |
 | `/ctest mining start` | 선택한 시민이 채굴 시작 |
 | `/ctest mining stop` | 선택한 시민이 채굴 중지 |
+| `/ctest home set` | 선택한 시민의 현위치를 복귀지점으로 기록 |
+| `/ctest home return` | 선택한 시민을 복귀지점으로 복귀시킴 |
+| `/ctest home report` | 선택한 시민의 복귀지점까지 거리와 도착 여부 집계 |
 | `/ctest debug` | 선택한 시민의 현재 작업과 실행 중인 AI goal 출력 |
+
+복귀는 길찾기로만 이뤄지며 순간이동은 사용하지 않습니다. 도착하거나 포기하면 서버 로그에
+결과가 한 줄씩 남고, 출발 당시 거리가 함께 기록되어 실제로 이동했는지 로그만으로 확인할 수
+있습니다. 도착 판정 기준은 1.5블록(`CitizenEntity.RETURN_ARRIVAL_DISTANCE`)입니다.
 
 명령어는 시민을 고르고 작업을 바꾸는 일만 합니다. 동작 자체는 전부 엔티티에 있으므로,
 나중에 직업 시스템이나 건물에서 부를 때는 `CitizenEntity#setTask(CitizenTask)`를 직접

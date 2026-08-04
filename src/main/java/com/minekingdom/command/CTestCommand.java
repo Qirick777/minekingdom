@@ -47,6 +47,13 @@ public final class CTestCommand {
                                 .executes(context -> assign(context, CitizenTask.MINING)))
                         .then(Commands.literal("stop")
                                 .executes(context -> assign(context, CitizenTask.IDLE))))
+                .then(Commands.literal("home")
+                        .then(Commands.literal("set")
+                                .executes(CTestCommand::setHome))
+                        .then(Commands.literal("return")
+                                .executes(context -> assign(context, CitizenTask.RETURNING)))
+                        .then(Commands.literal("report")
+                                .executes(CTestCommand::report)))
                 .then(Commands.literal("debug")
                         .executes(CTestCommand::debug)));
     }
@@ -77,6 +84,63 @@ public final class CTestCommand {
         return count;
     }
 
+    /** Records each selected citizen's current position as the place it must be able to walk back to. */
+    private static int setHome(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+
+        citizens.forEach(citizen -> citizen.setReturnPoint(citizen.blockPosition()));
+
+        int count = citizens.size();
+        source.sendSuccess(() -> Component.translatable("commands.minekingdom.ctest.home.set", count), true);
+        return count;
+    }
+
+    /**
+     * Prints how far each selected citizen is from its return point. Distances are
+     * measured from the citizens themselves, so a citizen that never moved shows up
+     * as such instead of being counted as a successful return.
+     */
+    private static int report(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+
+        int home = 0;
+        int away = 0;
+        int unset = 0;
+        for (CitizenEntity citizen : citizens) {
+            double distance = citizen.distanceToReturnPoint();
+            if (Double.isNaN(distance)) {
+                unset++;
+                source.sendSuccess(() -> Component.literal("home=unset task=" + citizen.getTask().getSerializedName()), false);
+                continue;
+            }
+            boolean arrived = distance <= CitizenEntity.RETURN_ARRIVAL_DISTANCE;
+            if (arrived) {
+                home++;
+            } else {
+                away++;
+            }
+            String line = String.format("dist=%.2f %s task=%s home=%s pos=%.1f,%.1f,%.1f",
+                    distance, arrived ? "AT_HOME" : "AWAY", citizen.getTask().getSerializedName(),
+                    citizen.getReturnPoint(), citizen.getX(), citizen.getY(), citizen.getZ());
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+
+        String summary = String.format("SUMMARY total=%d at_home=%d away=%d unset=%d tolerance=%.1f",
+                citizens.size(), home, away, unset, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
+        source.sendSuccess(() -> Component.literal(summary), false);
+        return home;
+    }
+
     /** Reports what each selected citizen is doing and which goals hold it. */
     private static int debug(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
@@ -104,9 +168,11 @@ public final class CTestCommand {
         citizens.forEach(citizen -> citizen.setTask(task));
 
         int count = citizens.size();
-        String key = task == CitizenTask.MINING
-                ? "commands.minekingdom.ctest.mining.start"
-                : "commands.minekingdom.ctest.mining.stop";
+        String key = switch (task) {
+            case MINING -> "commands.minekingdom.ctest.mining.start";
+            case RETURNING -> "commands.minekingdom.ctest.home.return";
+            case IDLE -> "commands.minekingdom.ctest.mining.stop";
+        };
         source.sendSuccess(() -> Component.translatable(key, count), true);
         return count;
     }
