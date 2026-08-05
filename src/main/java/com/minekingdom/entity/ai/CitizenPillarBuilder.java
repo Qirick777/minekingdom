@@ -55,29 +55,33 @@ public class CitizenPillarBuilder {
      * @return true while it is making progress, false if it cannot build here
      */
     public boolean tick() {
-        if (!this.canBuild() || !this.hasHeadroom()) {
-            return false;
-        }
-
-        if (this.jumpFrom == null) {
-            if (this.citizen.onGround()) {
-                this.jumpFrom = this.citizen.blockPosition();
-                this.jumpTicks = 0;
-                this.citizen.getJumpControl().jump();
+        // A jump already under way is seen through first. Checks against the citizen's
+        // block position mean something different once it is off the ground, so anything
+        // else here would abandon the climb halfway up every time.
+        if (this.jumpFrom != null) {
+            if (this.citizen.getY() >= this.jumpFrom.getY() + 1.0D) {
+                this.placeUnderfoot(this.jumpFrom);
+                this.jumpFrom = null;
+            } else if (++this.jumpTicks > JUMP_TIMEOUT) {
+                this.jumpFrom = null;
             }
             return true;
         }
 
-        // Only fill the space in once the citizen is clear of it.
-        if (this.citizen.getY() >= this.jumpFrom.getY() + 1.0D) {
-            this.placeUnderfoot(this.jumpFrom);
-            this.jumpFrom = null;
-            return true;
+        if (!this.canBuild() || !this.hasHeadroom()) {
+            return false;
         }
-        if (++this.jumpTicks > JUMP_TIMEOUT) {
-            this.jumpFrom = null;
+        if (this.citizen.onGround()) {
+            this.jumpFrom = this.citizen.blockPosition();
+            this.jumpTicks = 0;
+            this.citizen.getJumpControl().jump();
         }
         return true;
+    }
+
+    /** True while the citizen is off the ground waiting to drop a block into the gap. */
+    public boolean isMidJump() {
+        return this.jumpFrom != null;
     }
 
     private void placeUnderfoot(BlockPos pos) {

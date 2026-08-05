@@ -138,6 +138,10 @@ public class CitizenEscapeGoal extends Goal {
 
     @Override
     public void tick() {
+        if (this.pillar.isMidJump()) {
+            this.pillar.tick();
+            return;
+        }
         // A blocked ceiling has to come down before there is anywhere to climb to.
         if (!this.pillar.hasHeadroom()) {
             BlockPos ceiling = this.citizen.blockPosition().above(2);

@@ -44,6 +44,12 @@ public class CitizenTravel {
     private int repathCooldown;
     private double bestDistance = Double.MAX_VALUE;
     private int stallTicks;
+    /**
+     * Sticky once the citizen starts cutting a way through. Climbing takes a jump, a wait
+     * and a placement across several ticks, so dropping back to walking in between meant
+     * the pillar was never finished.
+     */
+    private boolean cutting;
 
     public CitizenTravel(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
@@ -58,6 +64,7 @@ public class CitizenTravel {
         this.repathCooldown = 0;
         this.bestDistance = Double.MAX_VALUE;
         this.stallTicks = 0;
+        this.cutting = false;
         this.breaker.reset();
         this.pillar.reset();
     }
@@ -89,8 +96,12 @@ public class CitizenTravel {
             this.stallTicks++;
         }
 
-        // Getting nowhere on foot: make an opening.
-        if (this.stallTicks > STALL_TICKS) {
+        // Getting nowhere on foot: make an opening, and keep at it until close enough that
+        // walking can finish the job.
+        if (this.cutting && distance <= CLOSE_RANGE) {
+            this.cutting = false;
+        } else if (this.cutting || this.stallTicks > STALL_TICKS) {
+            this.cutting = true;
             return this.cutThrough(target) ? Status.MOVING : Status.STUCK;
         }
 
@@ -109,6 +120,12 @@ public class CitizenTravel {
     /** Digs or builds one step towards the destination. */
     private boolean cutThrough(BlockPos target) {
         this.citizen.getNavigation().stop();
+        // See a climb through before looking at anything else.
+        if (this.pillar.isMidJump()) {
+            this.pillar.tick();
+            return true;
+        }
+
         Level level = this.citizen.level();
         BlockPos feet = this.citizen.blockPosition();
 
@@ -118,7 +135,6 @@ public class CitizenTravel {
                 return this.dig(ceiling);
             }
             if (this.pillar.tick()) {
-                this.progressMade();
                 return true;
             }
         }
@@ -130,7 +146,10 @@ public class CitizenTravel {
             }
         }
 
-        // Nothing above and nothing ahead can be opened up; try dropping to the level below.
+        // Only ever dig downwards when that is the way the destination actually lies.
+        if (target.getY() >= feet.getY()) {
+            return false;
+        }
         BlockPos down = feet.relative(facing).below();
         return !ReversibleWalk.isPassable(level, down, null) && this.dig(down);
     }
@@ -139,16 +158,8 @@ public class CitizenTravel {
         if (!CitizenMiningGoal.isBreakableSafely(this.citizen.level(), pos)) {
             return false;
         }
-        if (this.breaker.advance(pos)) {
-            this.progressMade();
-        }
+        this.breaker.advance(pos);
         return true;
-    }
-
-    /** Digging counts as getting somewhere, so the stall timer starts again. */
-    private void progressMade() {
-        this.stallTicks = 0;
-        this.bestDistance = Double.MAX_VALUE;
     }
 
     private Direction towards(BlockPos from, BlockPos to) {
