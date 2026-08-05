@@ -58,6 +58,16 @@ public class CitizenEscapeGoal extends Goal {
         if (this.citizen.level().getGameTime() < this.retryAfter) {
             return false;
         }
+        // A citizen already on its way home is left alone. The return goal travels with
+        // the same machinery towards the same kind of place and retries on its own, so
+        // stepping in front of it helps nothing and costs everything: taking over drops
+        // the plan and cancels a climb in mid-air, and since the return goal flags a
+        // citizen stuck exactly when it needs patience, the two traded it back and forth
+        // every few seconds. Not one interrupted citizen ever finished the first leg of a
+        // plan, however many legs it had.
+        if (this.citizen.getTask() == CitizenTask.RETURNING) {
+            return false;
+        }
         // A citizen already known to be stuck gets help whatever it is doing, including
         // nothing. An idle stuck citizen is one that gave up on getting somewhere, and
         // every other goal ignores it, so left alone it stands where it failed for good.
@@ -103,7 +113,8 @@ public class CitizenEscapeGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
-        return (this.citizen.isStuck() || this.citizen.getTask() != CitizenTask.IDLE)
+        return this.citizen.getTask() != CitizenTask.RETURNING
+                && (this.citizen.isStuck() || this.citizen.getTask() != CitizenTask.IDLE)
                 && this.elapsed < GIVE_UP_TICKS;
     }
 
