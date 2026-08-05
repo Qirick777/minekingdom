@@ -2,9 +2,11 @@ package com.minekingdom.entity;
 
 import com.minekingdom.MineKingdom;
 import com.minekingdom.entity.ai.CitizenEscapeGoal;
+import com.minekingdom.entity.ai.CitizenJourney;
 import com.minekingdom.entity.ai.CitizenMiningGoal;
 import com.minekingdom.entity.ai.CitizenPathMemory;
 import com.minekingdom.entity.ai.CitizenReturnGoal;
+import com.minekingdom.entity.ai.CitizenWatch;
 import com.minekingdom.entity.task.CitizenAssignment;
 import com.minekingdom.entity.task.CitizenTask;
 import net.minecraft.core.BlockPos;
@@ -110,6 +112,8 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private final Set<BlockPos> ownBlocks = new LinkedHashSet<>();
     /** Game time until which ordinary walking is not to be trusted for this citizen. */
     private long walkBanUntil;
+    /** What this citizen is doing about getting somewhere, kept current as it does it. */
+    private final CitizenJourney journey = new CitizenJourney();
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -160,12 +164,17 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
             this.updatePersistentAnger(serverLevel, true);
         }
         this.pathMemory.record(this.blockPosition());
+        CitizenWatch.sample(this);
         this.tickReturnUrge();
         super.customServerAiStep();
     }
 
     public CitizenPathMemory getPathMemory() {
         return this.pathMemory;
+    }
+
+    public CitizenJourney getJourney() {
+        return this.journey;
     }
 
     /** Notes a block this citizen put down, forgetting the oldest once the list is long. */
@@ -366,11 +375,14 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
                     this.getStringUUID(), this.returnPoint, ticks, String.format("%.2f", startDistance),
                     this.isExactlyAtReturnPoint() ? "exactly on" : "beside", blocksPlaced);
         } else {
-            MineKingdom.LOGGER.info("Citizen {} gave up returning to {} after {} ticks, {} blocks short of it "
-                            + "(set out {} blocks away, stacked {} block(s))",
-                    this.getStringUUID(), this.returnPoint, ticks,
+            // Everything the attempt ran into, in one greppable line. Without the tallies a
+            // failure that never got a plan and one that got plenty and could not walk them
+            // are the same sentence.
+            MineKingdom.LOGGER.info("CZPOST uuid={} at={} home={} ticks={} short={} setOut={} placed={} mined={} {}",
+                    this.getStringUUID(), this.blockPosition().toShortString(),
+                    this.returnPoint == null ? "none" : this.returnPoint.toShortString(), ticks,
                     String.format("%.2f", this.distanceToReturnPoint()), String.format("%.2f", startDistance),
-                    blocksPlaced);
+                    blocksPlaced, this.minedBlocks, this.journey.describe(this.level().getGameTime()));
         }
     }
 

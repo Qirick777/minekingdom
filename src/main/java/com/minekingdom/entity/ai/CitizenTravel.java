@@ -62,6 +62,8 @@ public class CitizenTravel {
 
     private final CitizenEntity citizen;
     private final double speedModifier;
+    /** Which goal this belongs to, so a report can say who is driving. */
+    private final String driver;
     private final CitizenBlockBreaker breaker;
     private final CitizenPillarBuilder pillar;
 
@@ -87,9 +89,10 @@ public class CitizenTravel {
     private int lastLeg;
     private int stallTicks;
 
-    public CitizenTravel(CitizenEntity citizen, double speedModifier) {
+    public CitizenTravel(CitizenEntity citizen, double speedModifier, String driver) {
         this.citizen = citizen;
         this.speedModifier = speedModifier;
+        this.driver = driver;
         this.breaker = new CitizenBlockBreaker(citizen);
         this.pillar = new CitizenPillarBuilder(citizen);
     }
@@ -107,6 +110,7 @@ public class CitizenTravel {
         this.stallTicks = 0;
         this.walkAnchor = null;
         this.walkStill = 0;
+        this.citizen.getJourney().begin(this.driver, this.destination);
     }
 
     public void stop() {
@@ -114,6 +118,7 @@ public class CitizenTravel {
         this.pillar.reset();
         this.dropPlan();
         this.citizen.getNavigation().stop();
+        this.citizen.getJourney().released();
     }
 
     /** Blocks stacked up on this trip, which is a cost worth reporting rather than hiding. */
@@ -127,6 +132,13 @@ public class CitizenTravel {
      * planner comes back with. Read-only, and the answer to "it is just standing there".
      */
     public static String describeRoute(CitizenEntity citizen, BlockPos target, double arrival) {
+        BlockPos live = citizen.getJourney().target();
+        if (live != null) {
+            // Whatever is actually driving decides where the citizen is going. Reporting a
+            // route to the return point while the escape goal heads for a breadcrumb
+            // describes a journey nobody is making.
+            target = live;
+        }
         Path path = citizen.getNavigation().createPath(target, 1);
         boolean canBuild = new CitizenPillarBuilder(citizen).canBuild();
         List<CitizenRoutePlanner.Step> plan = CitizenRoutePlanner.plan(citizen.level(), citizen.blockPosition(),
@@ -158,6 +170,7 @@ public class CitizenTravel {
         Vec3 centre = Vec3.atCenterOf(target);
         double distance = this.citizen.position().distanceTo(new Vec3(centre.x, target.getY(), centre.z));
         if (distance <= this.arrivalDistance) {
+            this.report(CitizenJourney.Mode.ARRIVED);
             return Status.ARRIVED;
         }
         this.citizen.getLookControl().setLookAt(centre.x, centre.y, centre.z);
@@ -167,12 +180,14 @@ public class CitizenTravel {
         // exactly how a citizen used to stare at its home for three minutes without ever
         // being counted as stuck.
         if (this.stalled()) {
+            this.report(CitizenJourney.Mode.STALLED);
             return Status.STUCK;
         }
 
         // A climb already under way is seen through before anything is re-examined.
         if (this.pillar.isMidJump()) {
             this.pillar.tick();
+            this.report(CitizenJourney.Mode.BUILDING);
             return Status.MOVING;
         }
 
@@ -213,6 +228,7 @@ public class CitizenTravel {
                 // ground. Asking again gets the same answer for as long as the ground stays
                 // as it is, so walking is put aside and the dig plan gets its turn.
                 this.citizen.banWalking(WALK_BAN_TICKS);
+                this.citizen.getJourney().countWalkBan();
                 this.walkable = false;
                 this.walkStill = 0;
                 this.citizen.getNavigation().stop();
@@ -222,6 +238,7 @@ public class CitizenTravel {
             if (distance < CLOSE_RANGE) {
                 this.citizen.getMoveControl().setWantedPosition(centre.x, target.getY(), centre.z, this.speedModifier);
             }
+            this.report(CitizenJourney.Mode.WALKING);
             return Status.MOVING;
         }
 
@@ -233,6 +250,7 @@ public class CitizenTravel {
             // Waiting out the cooldown with nothing to follow is not progress. Reporting it
             // as such kept the goal holding on to the citizen while it did nothing at all.
             if (this.replanCooldown > 0) {
+                this.report(CitizenJourney.Mode.NO_PLAN);
                 return Status.STUCK;
             }
             this.plan = CitizenRoutePlanner.plan(this.citizen.level(), this.citizen.blockPosition(), target,
@@ -240,11 +258,13 @@ public class CitizenTravel {
                     this.pillar.canBuild(), this.citizen::placedOwnBlock);
             this.leg = 0;
             this.legTicks = 0;
+            this.citizen.getJourney().countPlan(this.plan.isEmpty());
             if (this.plan.isEmpty()) {
                 // Backing off is for a search that came up empty. A plan the citizen has
                 // simply walked to the end of gets its next stretch straight away, since
                 // one plan only ever covers as far as the search box reaches.
                 this.replanCooldown = REPLAN_INTERVAL;
+                this.report(CitizenJourney.Mode.NO_PLAN);
                 return Status.STUCK;
             }
         }
@@ -263,6 +283,7 @@ public class CitizenTravel {
                 if (this.breaker.advance(blocking)) {
                     this.citizen.forgetOwnBlock(blocking);
                 }
+                this.report(CitizenJourney.Mode.DIGGING);
                 return Status.MOVING;
             }
         }
@@ -281,10 +302,12 @@ public class CitizenTravel {
             if (!this.pillar.tick()) {
                 this.dropPlan();
             }
+            this.report(CitizenJourney.Mode.BUILDING);
             return Status.MOVING;
         }
 
         if (++this.legTicks > LEG_TIMEOUT) {
+            this.citizen.getJourney().countLegTimeout();
             this.dropPlan();
             return Status.MOVING;
         }
@@ -292,6 +315,7 @@ public class CitizenTravel {
         BlockPos stand = step.stand();
         this.citizen.getMoveControl().setWantedPosition(stand.getX() + 0.5D, stand.getY(),
                 stand.getZ() + 0.5D, this.speedModifier);
+        this.report(CitizenJourney.Mode.PLAN_MOVE);
         return Status.MOVING;
     }
 
@@ -314,7 +338,17 @@ public class CitizenTravel {
             this.stallTicks = 0;
             return false;
         }
-        return ++this.stallTicks > STALL_TICKS;
+        if (++this.stallTicks == STALL_TICKS + 1) {
+            this.citizen.getJourney().countStallTrip();
+        }
+        return this.stallTicks > STALL_TICKS;
+    }
+
+    /** Publishes what this tick amounted to, so a report can say it rather than guess it. */
+    private void report(CitizenJourney.Mode mode) {
+        this.citizen.getJourney().update(this.citizen.level().getGameTime(), mode,
+                this.leg, this.plan.size(), this.legTicks, this.stallTicks, this.walkStill,
+                this.pillar.placedCount(), this.breaker.current(), this.breaker.progress());
     }
 
     private void dropPlan() {

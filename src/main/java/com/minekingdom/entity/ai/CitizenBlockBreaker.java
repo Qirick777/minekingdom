@@ -57,6 +57,17 @@ public class CitizenBlockBreaker {
         return true;
     }
 
+    /** The block being worked on, or null when nothing is. */
+    @Nullable
+    public BlockPos current() {
+        return this.current;
+    }
+
+    /** How far through the current block, from 0 to 1. */
+    public float progress() {
+        return this.progress;
+    }
+
     /** Drops any part-broken block and clears its crack overlay. */
     public void reset() {
         if (this.lastStage != -1 && this.current != null) {

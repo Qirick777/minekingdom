@@ -94,6 +94,69 @@ JAVA_HOME=/path/to/jdk-17 ./gradlew runClient
 현재는 곡괭이 없이도 캘 수 있으며, 채굴 속도는 `CitizenEntity#getDestroyProgressPerTick`
 한 곳에서 결정됩니다. 곡괭이를 도입할 때 이 메서드만 교체하면 됩니다.
 
+## 진단 도구
+
+시민이 "가만히 있다"는 현상은 원인이 여러 가지라 눈으로는 구분되지 않습니다. 아래 도구는
+전부 `key=value` 한 줄 포맷이며, 채팅과 서버 로그에 동시에 나가므로 grep으로 걸러집니다.
+
+### `/ctest why` — 지금 무엇을 하고 있는가 (`CZWHY`)
+
+```
+CZWHY uuid=d0d90936 task=returning stuck=false at=205,62,207 walkBanned=false
+  driver=return target=205,72,209 mode=DIGGING age=0 leg=3/6 legTicks=0
+  stall=9 walkStill=0 placed=0 dig=204,57,207@22%
+  plans=2 empty=0 legTimeouts=0 walkBans=0 stallTrips=0 goals=[4:CitizenReturnGoal]
+```
+
+`driver`/`target`은 **실제로 구동 중인 목표가 향하는 곳**입니다. 목표마다 목적지가 다르므로
+(탈출 목표는 발자취 앵커로 갑니다) 이걸 보지 않고 복귀지점 기준으로 추정하면 아무도 하지
+않는 여행을 설명하게 됩니다. `mode`는 WALKING / PLAN_MOVE / DIGGING / BUILDING / NO_PLAN /
+ARRIVED / STALLED. `age`는 이 값이 갱신된 지 몇 틱 지났는지로, 큰 값은 아무도 구동하지 않고
+있다는 뜻입니다.
+
+### `/ctest why blocked` — 왜 못 나가는가 (`CZBLOCK`)
+
+수평 4방향 × 단차 3 + 위로 쌓기 + 발판 뚫고 내려가기, 총 14개 출구를 하나씩 판정합니다.
+
+```
+CZBLOCK   north dy=+1 243,64,242 -> body blocked: UNBREAKABLE (bedrock at 243,64,242)
+CZBLOCK   east  dy=+0 244,63,243 -> no floor (air at 244,62,243)
+CZBLOCK   up(build)   243,64,243 -> head blocked: FALLING_ABOVE (gravel at 243,65,243)
+CZBLOCK   down(own)   243,62,243 -> cannot cut footing: NOT_NATURAL (cobblestone)
+```
+
+굴착 거부 사유는 AIR / UNBREAKABLE / NOT_NATURAL / FALLING_ABOVE / FLUID_INSIDE /
+FLUID_ADJACENT 여섯 가지로 구분됩니다. 경로계획은 이걸 전부 하나의 "안 됨"으로 합치기
+때문에, 자갈에 막힌 시민과 플레이어 건축물에 막힌 시민이 밖에서는 똑같아 보입니다.
+
+### `/ctest watch <틱>` — 시간에 따라 무엇을 했는가 (`CZWATCH`)
+
+1초마다 표본을 뜨고 종료 시 시민별로 판정합니다.
+
+```
+CZWATCH uuid=d0d90936 verdict=PROGRESSING samples=75 path=15.7 net=10.1 closed=+10.1
+  mined=30 from=206.0,52.0,206.0 to=205.4,62.0,207.5 target=205,72,209
+  modes=[PLAN_MOVE:6,DIGGING:69]
+```
+
+`verdict`는 FROZEN(총 이동 2블록 미만) / OSCILLATING(움직였으나 순변위 2블록 미만) /
+WANDERING(움직였으나 목표에 가까워지지 않음) / PROGRESSING(목표까지 2블록 이상 좁힘).
+스냅샷으로는 구분되지 않는 네 경우를 자동으로 갈라냅니다.
+
+### 복귀 포기 사후기록 (`CZPOST`)
+
+포기 시 서버 로그에 자동 기록됩니다.
+
+```
+CZPOST uuid=... at=243,63,243 home=205,72,209 ticks=3601 short=51.50 setOut=20.31
+  placed=0 mined=42 driver=return target=205,72,209 mode=NONE
+  plans=38 empty=35 legTimeouts=1 walkBans=0 stallTrips=0
+```
+
+`plans`/`empty` 비율이 핵심입니다. 위 예는 38회 탐색 중 35회가 빈 결과 — **계획 자체가 나온
+적이 거의 없음**(갇힘). 반대로 `empty`가 낮은데 `legTimeouts`나 `stallTrips`가 크면 계획은
+있었으나 걷지 못한 경우입니다. 이 둘은 원인도 대책도 전혀 다릅니다.
+
 ## 명령어
 
 `/ctest`는 시민을 손으로 부려 보기 위한 테스트 명령어입니다 (권한 레벨 2 필요).
@@ -105,6 +168,12 @@ JAVA_HOME=/path/to/jdk-17 ./gradlew runClient
 | `/ctest mining stop` | 선택한 시민이 채굴 중지 |
 | `/ctest mining report` | 시민별 채굴한 블록 수와 합계 출력 (노는 시민 확인용) |
 | `/ctest mining reset` | 채굴 카운터 초기화 |
+| `/ctest debug` | 시민별 계획 존재 여부 요약 |
+| `/ctest why` | 시민별 **현재 이동 상태** (아래 참조) |
+| `/ctest why blocked` | 선택된 첫 시민이 **왜 못 나가는지** 14개 출구별 사유 |
+| `/ctest watch <틱>` | 지정 시간 동안 추적 시작 |
+| `/ctest watch report` | 중간 집계 (추적 계속) |
+| `/ctest watch stop` | 집계 출력 후 종료 |
 | `/ctest home set` | 선택한 시민의 현위치를 복귀지점으로 기록 |
 | `/ctest home return` | 선택한 시민을 복귀지점으로 복귀시킴 |
 | `/ctest home report` | 선택한 시민의 복귀지점까지 거리와 도착 여부 집계 |

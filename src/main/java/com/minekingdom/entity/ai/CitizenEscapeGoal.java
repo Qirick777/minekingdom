@@ -49,7 +49,7 @@ public class CitizenEscapeGoal extends Goal {
 
     public CitizenEscapeGoal(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
-        this.travel = new CitizenTravel(citizen, speedModifier);
+        this.travel = new CitizenTravel(citizen, speedModifier, "escape");
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.JUMP, Flag.LOOK));
     }
 

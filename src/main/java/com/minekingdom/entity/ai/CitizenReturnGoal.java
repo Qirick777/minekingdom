@@ -45,7 +45,7 @@ public class CitizenReturnGoal extends Goal {
 
     public CitizenReturnGoal(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
-        this.travel = new CitizenTravel(citizen, speedModifier);
+        this.travel = new CitizenTravel(citizen, speedModifier, "return");
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK, Flag.JUMP));
     }
 

@@ -67,9 +67,33 @@ public final class CitizenRoutePlanner {
      *            is a wall to it, and a pillar it built is a one-way trip.
      */
     public static boolean isDiggable(Level level, BlockPos pos, @Nullable Predicate<BlockPos> own) {
+        return digVerdict(level, pos, own) == DigVerdict.OK;
+    }
+
+    /** Why a block may or may not be cut through. Five different noes used to read alike. */
+    public enum DigVerdict {
+        OK,
+        /** Nothing there to dig. */
+        AIR,
+        /** Bedrock and the like. */
+        UNBREAKABLE,
+        /** Not terrain, so somebody built it. */
+        NOT_NATURAL,
+        /** Sand or gravel overhead would come down on whoever cut this. */
+        FALLING_ABOVE,
+        /** The block is holding liquid. */
+        FLUID_INSIDE,
+        /** Cutting it would let liquid through from beside it. */
+        FLUID_ADJACENT
+    }
+
+    public static DigVerdict digVerdict(Level level, BlockPos pos, @Nullable Predicate<BlockPos> own) {
         BlockState state = level.getBlockState(pos);
-        if (state.isAir() || state.getDestroySpeed(level, pos) < 0.0F) {
-            return false;
+        if (state.isAir()) {
+            return DigVerdict.AIR;
+        }
+        if (state.getDestroySpeed(level, pos) < 0.0F) {
+            return DigVerdict.UNBREAKABLE;
         }
         boolean natural = state.is(Tags.Blocks.ORES)
                 || state.is(Tags.Blocks.STONE)
@@ -82,21 +106,21 @@ public final class CitizenRoutePlanner {
                 || state.is(Blocks.CLAY)
                 || state.is(Blocks.GRAVEL);
         if (!natural && (own == null || !own.test(pos))) {
-            return false;
+            return DigVerdict.NOT_NATURAL;
         }
         // The same care the mining rules take: do not let water in, and do not pull sand down.
         if (level.getBlockState(pos.above()).getBlock() instanceof FallingBlock) {
-            return false;
+            return DigVerdict.FALLING_ABOVE;
         }
         if (!level.getFluidState(pos).isEmpty()) {
-            return false;
+            return DigVerdict.FLUID_INSIDE;
         }
         for (Direction direction : Direction.values()) {
             if (!level.getFluidState(pos.relative(direction)).isEmpty()) {
-                return false;
+                return DigVerdict.FLUID_ADJACENT;
             }
         }
-        return true;
+        return DigVerdict.OK;
     }
 
     /**
@@ -170,7 +194,7 @@ public final class CitizenRoutePlanner {
         return steps;
     }
 
-    private static List<Edge> edges(Level level, BlockPos from, int horizontal, int vertical,
+    static List<Edge> edges(Level level, BlockPos from, int horizontal, int vertical,
                                     BlockPos origin, boolean canBuild, @Nullable Predicate<BlockPos> own) {
         List<Edge> edges = new ArrayList<>(13);
 
@@ -302,7 +326,7 @@ public final class CitizenRoutePlanner {
      * @param footing whether the citizen ends this leg on solid ground. False for swimming,
      *                which is no place to leave a citizen when a plan runs out.
      */
-    private record Edge(BlockPos target, int cost, List<BlockPos> clear, boolean build, boolean footing) {
+    record Edge(BlockPos target, int cost, List<BlockPos> clear, boolean build, boolean footing) {
     }
 
     private static final class Node implements Comparable<Node> {

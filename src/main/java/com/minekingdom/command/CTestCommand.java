@@ -1,6 +1,9 @@
 package com.minekingdom.command;
 
+import com.minekingdom.MineKingdom;
 import com.minekingdom.entity.CitizenEntity;
+import com.minekingdom.entity.ai.CitizenDiagnostics;
+import com.minekingdom.entity.ai.CitizenWatch;
 import com.minekingdom.entity.ai.CitizenTravel;
 import com.minekingdom.entity.task.CitizenAssignment;
 import com.minekingdom.entity.task.CitizenTask;
@@ -69,7 +72,21 @@ public final class CTestCommand {
                         .then(Commands.literal("report")
                                 .executes(CTestCommand::report)))
                 .then(Commands.literal("debug")
-                        .executes(CTestCommand::debug)));
+                        .executes(CTestCommand::debug))
+                // What each selected citizen is actually doing about getting somewhere.
+                .then(Commands.literal("why")
+                        .executes(CTestCommand::why)
+                        // Every way out of the nearest selected citizen's square, and the
+                        // reason each one is refused.
+                        .then(Commands.literal("blocked")
+                                .executes(CTestCommand::whyBlocked)))
+                .then(Commands.literal("watch")
+                        .then(Commands.literal("stop")
+                                .executes(context -> watchStop(context, true)))
+                        .then(Commands.literal("report")
+                                .executes(context -> watchStop(context, false)))
+                        .then(Commands.argument("ticks", IntegerArgumentType.integer(20, 24000))
+                                .executes(CTestCommand::watchStart))));
     }
 
     private static double range(CommandContext<CommandSourceStack> context) {
@@ -242,6 +259,85 @@ public final class CTestCommand {
             source.sendSuccess(() -> Component.literal(line), false);
         }
         return citizens.size();
+    }
+
+    /** What each selected citizen is doing about getting somewhere, straight from the driver. */
+    private static int why(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+        long now = source.getLevel().getGameTime();
+        for (CitizenEntity citizen : citizens) {
+            String line = "CZWHY uuid=" + citizen.getStringUUID().substring(0, 8)
+                    + " task=" + citizen.getTask().getSerializedName()
+                    + " stuck=" + citizen.isStuck()
+                    + " at=" + citizen.blockPosition().toShortString()
+                    + " walkBanned=" + citizen.isWalkingBanned()
+                    + " " + citizen.getJourney().describe(now)
+                    + " goals=[" + citizen.describeRunningGoals() + "]";
+            source.sendSuccess(() -> Component.literal(line), false);
+            MineKingdom.LOGGER.info(line);
+        }
+        return citizens.size();
+    }
+
+    /** Every step out of the nearest selected citizen's square, with the verdict on each. */
+    private static int whyBlocked(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+        // One citizen only: thirteen lines each would bury the answer for a whole shift.
+        CitizenEntity citizen = citizens.get(0);
+        String header = "CZBLOCK uuid=" + citizen.getStringUUID().substring(0, 8)
+                + " at=" + citizen.blockPosition().toShortString();
+        source.sendSuccess(() -> Component.literal(header), false);
+        MineKingdom.LOGGER.info(header);
+        for (String line : CitizenDiagnostics.explainExits(citizen)) {
+            String out = "CZBLOCK   " + line;
+            source.sendSuccess(() -> Component.literal(out), false);
+            MineKingdom.LOGGER.info(out);
+        }
+        return 1;
+    }
+
+    private static int watchStart(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+        int ticks = IntegerArgumentType.getInteger(context, "ticks");
+        CitizenWatch.clear();
+        CitizenWatch.start(citizens, ticks);
+        int count = citizens.size();
+        source.sendSuccess(() -> Component.literal(
+                "CZWATCH started n=" + count + " ticks=" + ticks), false);
+        return count;
+    }
+
+    private static int watchStop(CommandContext<CommandSourceStack> context, boolean clear) {
+        CommandSourceStack source = context.getSource();
+        if (!CitizenWatch.watching()) {
+            source.sendFailure(Component.literal("CZWATCH nothing being watched"));
+            return 0;
+        }
+        List<String> lines = CitizenWatch.report(source.getLevel().getGameTime());
+        for (String line : lines) {
+            String out = "CZWATCH " + line;
+            source.sendSuccess(() -> Component.literal(out), false);
+            MineKingdom.LOGGER.info(out);
+        }
+        if (clear) {
+            CitizenWatch.clear();
+        }
+        return lines.size();
     }
 
     /** Puts the selection to work, or calls it off. */
