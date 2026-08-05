@@ -139,7 +139,7 @@ public final class CitizenRoutePlanner {
 
         Node best = null;
         Node closest = null;
-        double closestScore = Double.MAX_VALUE;
+        double closestDistance = Double.MAX_VALUE;
         int expanded = 0;
         while (!queue.isEmpty() && expanded < nodeLimit) {
             Node current = queue.poll();
@@ -158,16 +158,20 @@ public final class CitizenRoutePlanner {
             // against the untouched world ruled out every climb, so a citizen with a long
             // way to go never got a plan that stacked or cut anything, however boxed in.
             //
-            // Where the citizen already is never counts. Scored on straight-line distance it
-            // beats every first move away from the goal, so anyone who has to climb down or
-            // double back before making ground was handed an empty plan for ever: one on a
-            // pinnacle with a drop on all four sides never took a single step in ten minutes.
-            // Scoring on the cost of getting there plus the distance left keeps the ordinary
-            // case picking a stop that makes ground, while leaving a way out of a dead end.
+            // Where the citizen already is never counts as somewhere to get to. Leaving it
+            // in the running is what handed an empty plan, for ever, to anyone whose every
+            // first move is further from the goal than standing still: one citizen on a
+            // pinnacle with a drop on all four sides took no step at all in ten minutes.
+            //
+            // Distance alone decides between the rest. Scoring it as cost-so-far plus
+            // distance-left instead looks principled and is not: a move towards the goal
+            // costs MOVE_COST and saves exactly MOVE_COST of distance, so every stop along
+            // a sensible route ties, the nearest wins the tie, and a citizen gets a one-leg
+            // plan, walks a block, and plans again -- five hundred searches to go nowhere.
             if (current.parent != null && current.footing) {
-                double score = current.cost + MOVE_COST * Math.sqrt(current.pos.distSqr(goal));
-                if (score < closestScore) {
-                    closestScore = score;
+                double toGoal = current.pos.distSqr(goal);
+                if (toGoal < closestDistance) {
+                    closestDistance = toGoal;
                     closest = current;
                 }
             }
