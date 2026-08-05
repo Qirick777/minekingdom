@@ -109,7 +109,7 @@ public final class CitizenRoutePlanner {
                                   @Nullable Predicate<BlockPos> own) {
         Map<BlockPos, Node> seen = new HashMap<>();
         PriorityQueue<Node> queue = new PriorityQueue<>();
-        Node start = new Node(from, 0, null, List.of(), false);
+        Node start = new Node(from, 0, null, List.of(), false, true);
         seen.put(from, start);
         queue.add(start);
 
@@ -128,10 +128,13 @@ public final class CitizenRoutePlanner {
                 best = current;
                 break;
             }
-            // Only dry ground counts as somewhere to break a long journey. Stopping a
-            // partial plan in open water would leave a citizen worse off than it started.
+            // Somewhere to break a long journey has to be somewhere the citizen can stand
+            // once it gets there, which is not the same as somewhere it could stand now:
+            // a step that stacks a block or clears one makes its own footing. Judging this
+            // against the untouched world ruled out every climb, so a citizen with a long
+            // way to go never got a plan that stacked or cut anything, however boxed in.
             double toGoal = current.pos.distSqr(goal);
-            if (toGoal < closestDistance && ReversibleWalk.canStandAt(level, current.pos, null)) {
+            if (toGoal < closestDistance && current.footing) {
                 closestDistance = toGoal;
                 closest = current;
             }
@@ -145,7 +148,7 @@ public final class CitizenRoutePlanner {
                 if (known != null) {
                     known.stale = true;
                 }
-                Node next = new Node(edge.target, cost, current, edge.clear, edge.build);
+                Node next = new Node(edge.target, cost, current, edge.clear, edge.build, edge.footing);
                 seen.put(edge.target, next);
                 queue.add(next);
             }
@@ -207,7 +210,7 @@ public final class CitizenRoutePlanner {
             if (landingState.isFaceSturdy(level, landing, Direction.UP)) {
                 Set<BlockPos> clear = new HashSet<>();
                 clear.add(below.immutable());
-                edges.add(new Edge(below, MOVE_COST + cost(level, clear), List.copyOf(clear), false));
+                edges.add(new Edge(below, MOVE_COST + cost(level, clear), List.copyOf(clear), false, true));
             }
         }
 
@@ -216,7 +219,7 @@ public final class CitizenRoutePlanner {
             if (!outside(origin, above, horizontal, vertical)) {
                 Set<BlockPos> clear = new HashSet<>();
                 if (clearable(level, above, clear, own) && clearable(level, above.above(), clear, own)) {
-                    edges.add(new Edge(above, BUILD_COST + cost(level, clear), List.copyOf(clear), true));
+                    edges.add(new Edge(above, BUILD_COST + cost(level, clear), List.copyOf(clear), true, true));
                 }
             }
         }
@@ -239,7 +242,7 @@ public final class CitizenRoutePlanner {
         if (dy > 0 && !clearable(level, from.above(2), clear, own)) {
             return null;
         }
-        return new Edge(target, MOVE_COST + cost(level, clear), List.copyOf(clear), false);
+        return new Edge(target, MOVE_COST + cost(level, clear), List.copyOf(clear), false, true);
     }
 
     /**
@@ -251,7 +254,7 @@ public final class CitizenRoutePlanner {
         if (!inWater(level, target) || !open(level, target.above())) {
             return null;
         }
-        return new Edge(target, SWIM_COST, List.of(), false);
+        return new Edge(target, SWIM_COST, List.of(), false, false);
     }
 
     private static boolean inWater(Level level, BlockPos pos) {
@@ -295,7 +298,11 @@ public final class CitizenRoutePlanner {
         return pos.distSqr(goal) <= arrival * arrival;
     }
 
-    private record Edge(BlockPos target, int cost, List<BlockPos> clear, boolean build) {
+    /**
+     * @param footing whether the citizen ends this leg on solid ground. False for swimming,
+     *                which is no place to leave a citizen when a plan runs out.
+     */
+    private record Edge(BlockPos target, int cost, List<BlockPos> clear, boolean build, boolean footing) {
     }
 
     private static final class Node implements Comparable<Node> {
@@ -304,14 +311,16 @@ public final class CitizenRoutePlanner {
         private final Node parent;
         private final List<BlockPos> clear;
         private final boolean build;
+        private final boolean footing;
         private boolean stale;
 
-        private Node(BlockPos pos, int cost, Node parent, List<BlockPos> clear, boolean build) {
+        private Node(BlockPos pos, int cost, Node parent, List<BlockPos> clear, boolean build, boolean footing) {
             this.pos = pos;
             this.cost = cost;
             this.parent = parent;
             this.clear = clear;
             this.build = build;
+            this.footing = footing;
         }
 
         @Override
