@@ -1,6 +1,7 @@
 package com.minekingdom.command;
 
 import com.minekingdom.entity.CitizenEntity;
+import com.minekingdom.entity.ai.CitizenTravel;
 import com.minekingdom.entity.task.CitizenAssignment;
 import com.minekingdom.entity.task.CitizenTask;
 import com.mojang.brigadier.CommandDispatcher;
@@ -9,6 +10,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -227,8 +229,13 @@ public final class CTestCommand {
             return 0;
         }
         for (CitizenEntity citizen : citizens) {
+            BlockPos home = citizen.getReturnPoint();
+            String route = home == null ? "home=unset"
+                    : CitizenTravel.describeRoute(citizen, home, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
             String line = "task=" + citizen.getTask().getSerializedName()
                     + " stuck=" + citizen.isStuck()
+                    + " at=" + citizen.blockPosition().toShortString()
+                    + " " + route
                     + " goals=[" + citizen.describeRunningGoals() + "]";
             source.sendSuccess(() -> Component.literal(line), false);
         }

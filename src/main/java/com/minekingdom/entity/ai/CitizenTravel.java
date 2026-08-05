@@ -44,6 +44,14 @@ public class CitizenTravel {
      * which is a deepslate ore at 135 ticks bare-handed.
      */
     private static final int STALL_TICKS = 200;
+    /**
+     * How long walking is given to actually move the citizen before its promise is treated
+     * as empty. Pathfinding reports it can reach places a citizen cannot physically walk to,
+     * and believing that leaves one standing still with a perfectly good dig plan unused.
+     */
+    private static final int WALK_STALL_TICKS = 60;
+    /** How long walking stays out of favour once it has failed to deliver. */
+    private static final int WALK_BAN_TICKS = 200;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -60,6 +68,11 @@ public class CitizenTravel {
     private int leg;
     private int legTicks;
     private int replanCooldown;
+
+    @Nullable
+    private BlockPos walkPos;
+    private int walkStill;
+    private int walkBan;
 
     @Nullable
     private BlockPos lastProgressPos;
@@ -86,6 +99,9 @@ public class CitizenTravel {
         this.pillar.reset();
         this.lastProgressPos = null;
         this.stallTicks = 0;
+        this.walkPos = null;
+        this.walkStill = 0;
+        this.walkBan = 0;
     }
 
     public void stop() {
@@ -98,6 +114,34 @@ public class CitizenTravel {
     /** Blocks stacked up on this trip, which is a cost worth reporting rather than hiding. */
     public int blocksPlaced() {
         return this.pillar.placedCount();
+    }
+
+    /**
+     * A one-line account of how a citizen would try to reach somewhere: whether ordinary
+     * pathfinding claims it can, whether it has anything to stack up on, and what the route
+     * planner comes back with. Read-only, and the answer to "it is just standing there".
+     */
+    public static String describeRoute(CitizenEntity citizen, BlockPos target, double arrival) {
+        Path path = citizen.getNavigation().createPath(target, 1);
+        boolean canBuild = new CitizenPillarBuilder(citizen).canBuild();
+        List<CitizenRoutePlanner.Step> plan = CitizenRoutePlanner.plan(citizen.level(), citizen.blockPosition(),
+                target, arrival, PLAN_HORIZONTAL, PLAN_VERTICAL, PLAN_NODE_LIMIT, canBuild,
+                citizen::placedOwnBlock);
+
+        StringBuilder legs = new StringBuilder();
+        for (int i = 0; i < Math.min(5, plan.size()); i++) {
+            CitizenRoutePlanner.Step step = plan.get(i);
+            legs.append(' ').append(step.stand().toShortString());
+            if (step.buildUnderfoot()) {
+                legs.append("+build");
+            }
+            if (!step.clear().isEmpty()) {
+                legs.append("+dig").append(step.clear().size());
+            }
+        }
+        return "walkable=" + (path != null && path.canReach())
+                + " canBuild=" + canBuild
+                + " legs=" + plan.size() + legs;
     }
 
     public Status tick() {
@@ -133,18 +177,39 @@ public class CitizenTravel {
 
         // Walking wins whenever it genuinely gets there. Checked on a cooldown because
         // working out a path is not free, and the answer does not change tick to tick.
-        if (--this.repathCooldown <= 0) {
+        if (this.walkBan > 0) {
+            this.walkBan--;
+            this.walkable = false;
+        } else if (--this.repathCooldown <= 0) {
             this.repathCooldown = REPATH_INTERVAL;
             Path path = this.citizen.getNavigation().createPath(target, 1);
             this.walkable = path != null && path.canReach();
             if (this.walkable) {
                 this.dropPlan();
                 this.breaker.reset();
+                this.walkPos = null;
+                this.walkStill = 0;
                 this.citizen.getNavigation().moveTo(path, this.speedModifier);
             }
         }
 
         if (this.walkable) {
+            BlockPos now = this.citizen.blockPosition();
+            if (now.equals(this.walkPos)) {
+                // Pathfinding said it could get there, and then the citizen did not move a
+                // muscle. Asking again gets the same answer for as long as the ground stays
+                // as it is, so walking is put aside and the dig plan gets its turn.
+                if (++this.walkStill > WALK_STALL_TICKS) {
+                    this.walkable = false;
+                    this.walkBan = WALK_BAN_TICKS;
+                    this.walkStill = 0;
+                    this.citizen.getNavigation().stop();
+                    return this.followPlan(target);
+                }
+            } else {
+                this.walkPos = now;
+                this.walkStill = 0;
+            }
             // Pathfinding calls an adjacent block close enough and stops, so steer the last bit.
             if (distance < CLOSE_RANGE) {
                 this.citizen.getMoveControl().setWantedPosition(centre.x, target.getY(), centre.z, this.speedModifier);
