@@ -3,11 +3,13 @@ package com.minekingdom.entity.ai;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.common.Tags;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,6 +39,11 @@ public final class CitizenRoutePlanner {
     private static final int DIG_HARDNESS_COST = 30;
     /** Deliberately steep: building leaves blocks behind and spends what the citizen carries. */
     private static final int BUILD_COST = 140;
+    /**
+     * Swimming sits between walking and digging: a citizen crosses water rather than cutting
+     * a tunnel round it, but takes any dry way it can instead of getting wet.
+     */
+    private static final int SWIM_COST = 45;
 
     private CitizenRoutePlanner() {
     }
@@ -109,8 +116,10 @@ public final class CitizenRoutePlanner {
                 best = current;
                 break;
             }
+            // Only dry ground counts as somewhere to break a long journey. Stopping a
+            // partial plan in open water would leave a citizen worse off than it started.
             double toGoal = current.pos.distSqr(goal);
-            if (toGoal < closestDistance) {
+            if (toGoal < closestDistance && ReversibleWalk.canStandAt(level, current.pos, null)) {
                 closestDistance = toGoal;
                 closest = current;
             }
@@ -157,6 +166,20 @@ public final class CitizenRoutePlanner {
                     continue;
                 }
                 Edge edge = stepEdge(level, from, target, dy);
+                if (edge == null) {
+                    edge = swimEdge(level, target);
+                }
+                if (edge != null) {
+                    edges.add(edge);
+                }
+            }
+        }
+
+        // Straight up through water, which is how a citizen gets its head back to the surface.
+        if (inWater(level, from)) {
+            BlockPos up = from.above();
+            if (!outside(origin, up, horizontal, vertical)) {
+                Edge edge = swimEdge(level, up);
                 if (edge != null) {
                     edges.add(edge);
                 }
@@ -204,6 +227,27 @@ public final class CitizenRoutePlanner {
             return null;
         }
         return new Edge(target, MOVE_COST + cost(level, clear), List.copyOf(clear), false);
+    }
+
+    /**
+     * Water the citizen can swim through. It floats, so no floor is needed, but the space
+     * has to be clear of anything solid and the citizen is not sent into lava.
+     */
+    @Nullable
+    private static Edge swimEdge(Level level, BlockPos target) {
+        if (!inWater(level, target) || !open(level, target.above())) {
+            return null;
+        }
+        return new Edge(target, SWIM_COST, List.of(), false);
+    }
+
+    private static boolean inWater(Level level, BlockPos pos) {
+        return level.getFluidState(pos).is(FluidTags.WATER);
+    }
+
+    /** Somewhere a body fits: open air, or more water. */
+    private static boolean open(Level level, BlockPos pos) {
+        return ReversibleWalk.isPassable(level, pos, null) || inWater(level, pos);
     }
 
     /** Already open, or something the citizen is allowed to open up. */
