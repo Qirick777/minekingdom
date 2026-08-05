@@ -20,9 +20,10 @@ public class CitizenReturnGoal extends Goal {
     private static final int GIVE_UP_TICKS = 3600;
     /**
      * Holding on with nothing to do keeps every other goal shut out, which is what left
-     * citizens standing perfectly still until something hit them.
+     * citizens standing perfectly still until something hit them. Long enough to sit
+     * through three attempts at a fresh plan, and no longer.
      */
-    private static final int STUCK_PATIENCE = 100;
+    private static final int STUCK_PATIENCE = 200;
 
     private final CitizenEntity citizen;
     private final CitizenTravel travel;

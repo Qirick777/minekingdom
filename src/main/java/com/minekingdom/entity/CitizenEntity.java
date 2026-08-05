@@ -50,6 +50,9 @@ import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -80,6 +83,8 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
      * once and others staying out for twenty minutes.
      */
     private static final double RETURN_URGE_PER_TICK = 1.07E-7D;
+    /** Far more than any single climb needs; only there so the list cannot grow without end. */
+    private static final int OWN_BLOCK_LIMIT = 256;
 
     private final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
     private int selectedSlot;
@@ -97,6 +102,12 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private int returnBlocksPlaced;
     /** The ground this citizen has walked over, kept walkable whatever it is working on. */
     private final CitizenPathMemory pathMemory = new CitizenPathMemory();
+    /**
+     * Blocks this citizen stacked up underfoot, so it can take them back down again.
+     * Cobblestone is nothing a citizen is otherwise allowed to break, and without this a
+     * citizen that pillars up is left on top of its own work with no legal way off.
+     */
+    private final Set<BlockPos> ownBlocks = new LinkedHashSet<>();
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -153,6 +164,25 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
 
     public CitizenPathMemory getPathMemory() {
         return this.pathMemory;
+    }
+
+    /** Notes a block this citizen put down, forgetting the oldest once the list is long. */
+    public void rememberOwnBlock(BlockPos pos) {
+        if (this.ownBlocks.size() >= OWN_BLOCK_LIMIT) {
+            Iterator<BlockPos> oldest = this.ownBlocks.iterator();
+            oldest.next();
+            oldest.remove();
+        }
+        this.ownBlocks.add(pos.immutable());
+    }
+
+    /** Whether this citizen is the one who put a block here, and so may take it back. */
+    public boolean placedOwnBlock(BlockPos pos) {
+        return this.ownBlocks.contains(pos);
+    }
+
+    public void forgetOwnBlock(BlockPos pos) {
+        this.ownBlocks.remove(pos);
     }
 
     @Override

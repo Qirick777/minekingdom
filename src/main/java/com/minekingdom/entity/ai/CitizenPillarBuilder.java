@@ -109,6 +109,9 @@ public class CitizenPillarBuilder {
         BlockState state = ((BlockItem) stack.getItem()).getBlock().defaultBlockState();
 
         level.setBlockAndUpdate(pos, state);
+        // Noted as the citizen's own, which is what later lets it dig the block back out
+        // and climb down. Cobblestone is off limits to citizens in every other context.
+        this.citizen.rememberOwnBlock(pos);
         stack.shrink(1);
         this.citizen.getInventory().setChanged();
         this.placed++;

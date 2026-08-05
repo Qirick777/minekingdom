@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Works out how a citizen can get somewhere when walking alone will not do it.
@@ -57,6 +58,15 @@ public final class CitizenRoutePlanner {
      * like, so citizens tunnel through terrain but never through anything anyone built.
      */
     public static boolean isDiggable(Level level, BlockPos pos) {
+        return isDiggable(level, pos, null);
+    }
+
+    /**
+     * @param own recognises blocks the citizen stacked up itself, which it may take back
+     *            down whatever they are made of. Without that a citizen's own cobblestone
+     *            is a wall to it, and a pillar it built is a one-way trip.
+     */
+    public static boolean isDiggable(Level level, BlockPos pos, @Nullable Predicate<BlockPos> own) {
         BlockState state = level.getBlockState(pos);
         if (state.isAir() || state.getDestroySpeed(level, pos) < 0.0F) {
             return false;
@@ -71,7 +81,7 @@ public final class CitizenRoutePlanner {
                 || state.is(BlockTags.SAND)
                 || state.is(Blocks.CLAY)
                 || state.is(Blocks.GRAVEL);
-        if (!natural) {
+        if (!natural && (own == null || !own.test(pos))) {
             return false;
         }
         // The same care the mining rules take: do not let water in, and do not pull sand down.
@@ -91,10 +101,12 @@ public final class CitizenRoutePlanner {
 
     /**
      * @param canBuild whether the citizen is carrying something to stack up on
+     * @param own      recognises blocks the citizen put down itself
      * @return the legs to walk, in order, or an empty list if there is no way through
      */
     public static List<Step> plan(Level level, BlockPos from, BlockPos goal, double arrival,
-                                  int horizontal, int vertical, int nodeLimit, boolean canBuild) {
+                                  int horizontal, int vertical, int nodeLimit, boolean canBuild,
+                                  @Nullable Predicate<BlockPos> own) {
         Map<BlockPos, Node> seen = new HashMap<>();
         PriorityQueue<Node> queue = new PriorityQueue<>();
         Node start = new Node(from, 0, null, List.of(), false);
@@ -124,7 +136,7 @@ public final class CitizenRoutePlanner {
                 closest = current;
             }
 
-            for (Edge edge : edges(level, current.pos, horizontal, vertical, from, canBuild)) {
+            for (Edge edge : edges(level, current.pos, horizontal, vertical, from, canBuild, own)) {
                 int cost = current.cost + edge.cost;
                 Node known = seen.get(edge.target);
                 if (known != null && known.cost <= cost) {
@@ -156,7 +168,7 @@ public final class CitizenRoutePlanner {
     }
 
     private static List<Edge> edges(Level level, BlockPos from, int horizontal, int vertical,
-                                    BlockPos origin, boolean canBuild) {
+                                    BlockPos origin, boolean canBuild, @Nullable Predicate<BlockPos> own) {
         List<Edge> edges = new ArrayList<>(13);
 
         for (Direction direction : Direction.Plane.HORIZONTAL) {
@@ -165,7 +177,7 @@ public final class CitizenRoutePlanner {
                 if (outside(origin, target, horizontal, vertical)) {
                     continue;
                 }
-                Edge edge = stepEdge(level, from, target, dy);
+                Edge edge = stepEdge(level, from, target, dy, own);
                 if (edge == null) {
                     edge = swimEdge(level, target);
                 }
@@ -189,7 +201,7 @@ public final class CitizenRoutePlanner {
         // Down through its own footing, which is how anyone gets off a pillar they built.
         // Only one block at a time, so the citizen steps down rather than falling.
         BlockPos below = from.below();
-        if (!outside(origin, below, horizontal, vertical) && isDiggable(level, below)) {
+        if (!outside(origin, below, horizontal, vertical) && isDiggable(level, below, own)) {
             BlockPos landing = below.below();
             BlockState landingState = level.getBlockState(landing);
             if (landingState.isFaceSturdy(level, landing, Direction.UP)) {
@@ -203,7 +215,7 @@ public final class CitizenRoutePlanner {
             BlockPos above = from.above();
             if (!outside(origin, above, horizontal, vertical)) {
                 Set<BlockPos> clear = new HashSet<>();
-                if (clearable(level, above, clear) && clearable(level, above.above(), clear)) {
+                if (clearable(level, above, clear, own) && clearable(level, above.above(), clear, own)) {
                     edges.add(new Edge(above, BUILD_COST + cost(level, clear), List.copyOf(clear), true));
                 }
             }
@@ -211,7 +223,8 @@ public final class CitizenRoutePlanner {
         return edges;
     }
 
-    private static Edge stepEdge(Level level, BlockPos from, BlockPos target, int dy) {
+    private static Edge stepEdge(Level level, BlockPos from, BlockPos target, int dy,
+                                 @Nullable Predicate<BlockPos> own) {
         Set<BlockPos> clear = new HashSet<>();
 
         BlockPos floor = target.below();
@@ -219,11 +232,11 @@ public final class CitizenRoutePlanner {
         if (!floorState.isFaceSturdy(level, floor, Direction.UP)) {
             return null;
         }
-        if (!clearable(level, target, clear) || !clearable(level, target.above(), clear)) {
+        if (!clearable(level, target, clear, own) || !clearable(level, target.above(), clear, own)) {
             return null;
         }
         // Climbing needs the space over the citizen's own head opened up too.
-        if (dy > 0 && !clearable(level, from.above(2), clear)) {
+        if (dy > 0 && !clearable(level, from.above(2), clear, own)) {
             return null;
         }
         return new Edge(target, MOVE_COST + cost(level, clear), List.copyOf(clear), false);
@@ -251,11 +264,12 @@ public final class CitizenRoutePlanner {
     }
 
     /** Already open, or something the citizen is allowed to open up. */
-    private static boolean clearable(Level level, BlockPos pos, Set<BlockPos> clear) {
+    private static boolean clearable(Level level, BlockPos pos, Set<BlockPos> clear,
+                                     @Nullable Predicate<BlockPos> own) {
         if (ReversibleWalk.isPassable(level, pos, null)) {
             return true;
         }
-        if (!isDiggable(level, pos)) {
+        if (!isDiggable(level, pos, own)) {
             return false;
         }
         clear.add(pos.immutable());

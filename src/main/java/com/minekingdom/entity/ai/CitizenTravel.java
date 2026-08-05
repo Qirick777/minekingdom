@@ -38,6 +38,12 @@ public class CitizenTravel {
     private static final int PLAN_NODE_LIMIT = 3000;
     private static final int REPLAN_INTERVAL = 60;
     private static final int LEG_TIMEOUT = 120;
+    /**
+     * Ticks of no movement, no block broken and no block placed before travel is called off.
+     * Comfortably longer than the slowest thing a citizen can legitimately stand still for,
+     * which is a deepslate ore at 135 ticks bare-handed.
+     */
+    private static final int STALL_TICKS = 200;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -55,6 +61,13 @@ public class CitizenTravel {
     private int legTicks;
     private int replanCooldown;
 
+    @Nullable
+    private BlockPos lastProgressPos;
+    private int lastMined;
+    private int lastPlaced;
+    private int lastLeg;
+    private int stallTicks;
+
     public CitizenTravel(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
         this.speedModifier = speedModifier;
@@ -71,6 +84,8 @@ public class CitizenTravel {
         this.dropPlan();
         this.breaker.reset();
         this.pillar.reset();
+        this.lastProgressPos = null;
+        this.stallTicks = 0;
     }
 
     public void stop() {
@@ -97,6 +112,14 @@ public class CitizenTravel {
             return Status.ARRIVED;
         }
         this.citizen.getLookControl().setLookAt(centre.x, centre.y, centre.z);
+
+        // Whether the citizen is getting anywhere is judged on what it has actually done,
+        // not on what this class reports. Saying MOVING while standing perfectly still is
+        // exactly how a citizen used to stare at its home for three minutes without ever
+        // being counted as stuck.
+        if (this.stalled()) {
+            return Status.STUCK;
+        }
 
         // A climb already under way is seen through before anything is re-examined.
         if (this.pillar.isMidJump()) {
@@ -134,15 +157,21 @@ public class CitizenTravel {
 
     private Status followPlan(BlockPos target) {
         if (this.plan.isEmpty() || this.leg >= this.plan.size()) {
+            // Waiting out the cooldown with nothing to follow is not progress. Reporting it
+            // as such kept the goal holding on to the citizen while it did nothing at all.
             if (this.replanCooldown > 0) {
-                return Status.MOVING;
+                return Status.STUCK;
             }
-            this.replanCooldown = REPLAN_INTERVAL;
             this.plan = CitizenRoutePlanner.plan(this.citizen.level(), this.citizen.blockPosition(), target,
-                    this.arrivalDistance, PLAN_HORIZONTAL, PLAN_VERTICAL, PLAN_NODE_LIMIT, this.pillar.canBuild());
+                    this.arrivalDistance, PLAN_HORIZONTAL, PLAN_VERTICAL, PLAN_NODE_LIMIT,
+                    this.pillar.canBuild(), this.citizen::placedOwnBlock);
             this.leg = 0;
             this.legTicks = 0;
             if (this.plan.isEmpty()) {
+                // Backing off is for a search that came up empty. A plan the citizen has
+                // simply walked to the end of gets its next stretch straight away, since
+                // one plan only ever covers as far as the search box reaches.
+                this.replanCooldown = REPLAN_INTERVAL;
                 return Status.STUCK;
             }
         }
@@ -154,13 +183,24 @@ public class CitizenTravel {
         for (BlockPos blocking : step.clear()) {
             if (!ReversibleWalk.isPassable(level, blocking, null)) {
                 this.citizen.getNavigation().stop();
-                if (!CitizenRoutePlanner.isDiggable(level, blocking)) {
+                if (!CitizenRoutePlanner.isDiggable(level, blocking, this.citizen::placedOwnBlock)) {
                     this.dropPlan();
                     return Status.MOVING;
                 }
-                this.breaker.advance(blocking);
+                if (this.breaker.advance(blocking)) {
+                    this.citizen.forgetOwnBlock(blocking);
+                }
                 return Status.MOVING;
             }
+        }
+
+        // Standing where this leg was meant to end finishes it, however it was reached.
+        // Checked ahead of building: behind it, a leg that stacks a block never completed,
+        // so one block of climb turned into a tower as tall as the citizen's pockets.
+        if (this.citizen.blockPosition().equals(step.stand())) {
+            this.leg++;
+            this.legTicks = 0;
+            return Status.MOVING;
         }
 
         if (step.buildUnderfoot()) {
@@ -168,12 +208,6 @@ public class CitizenTravel {
             if (!this.pillar.tick()) {
                 this.dropPlan();
             }
-            return Status.MOVING;
-        }
-
-        if (this.citizen.blockPosition().equals(step.stand())) {
-            this.leg++;
-            this.legTicks = 0;
             return Status.MOVING;
         }
 
@@ -186,6 +220,27 @@ public class CitizenTravel {
         this.citizen.getMoveControl().setWantedPosition(stand.getX() + 0.5D, stand.getY(),
                 stand.getZ() + 0.5D, this.speedModifier);
         return Status.MOVING;
+    }
+
+    /**
+     * Whether the citizen has gone nowhere and done nothing for long enough to give up on.
+     * Digging and climbing count as getting somewhere even though the citizen holds still
+     * for them, so this only fires on a citizen that is genuinely doing nothing.
+     */
+    private boolean stalled() {
+        BlockPos pos = this.citizen.blockPosition();
+        int mined = this.citizen.getMinedBlocks();
+        int placed = this.pillar.placedCount();
+        if (this.lastProgressPos == null || !pos.equals(this.lastProgressPos)
+                || mined != this.lastMined || placed != this.lastPlaced || this.leg != this.lastLeg) {
+            this.lastProgressPos = pos;
+            this.lastMined = mined;
+            this.lastPlaced = placed;
+            this.lastLeg = this.leg;
+            this.stallTicks = 0;
+            return false;
+        }
+        return ++this.stallTicks > STALL_TICKS;
     }
 
     private void dropPlan() {
