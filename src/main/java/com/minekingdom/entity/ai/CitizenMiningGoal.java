@@ -11,7 +11,6 @@ import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.pathfinder.PathComputationType;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -19,12 +18,9 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.common.Tags;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Deque;
 import java.util.EnumSet;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -39,6 +35,8 @@ import java.util.Set;
  *   <li>the citizen must be able to walk to a spot beside it using steps of at most
  *       one block up or down with two blocks of headroom, which makes every step
  *       reversible and so the walk is always one it can come back from;</li>
+ *   <li>never a block whose removal would strand the citizen away from ground it has
+ *       recently stood on, since mining changes the very terrain rule four is judged on;</li>
  *   <li>if nothing qualifies this goal stands down and the stroll goal takes over.</li>
  * </ol>
  */
@@ -52,6 +50,9 @@ public class CitizenMiningGoal extends Goal {
     private static final int APPROACH_TIMEOUT = 200;
     /** Caps the ray casts spent looking for a visible block in one search. */
     private static final int MAX_SIGHT_CHECKS = 16;
+    private static final int SAFETY_HORIZONTAL = 8;
+    private static final int SAFETY_VERTICAL = 5;
+    private static final int SAFETY_NODE_LIMIT = 512;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -218,7 +219,8 @@ public class CitizenMiningGoal extends Goal {
         this.standSpot = null;
 
         BlockPos origin = this.citizen.blockPosition();
-        Set<BlockPos> reachable = this.walkableSpots(origin);
+        Set<BlockPos> reachable = ReversibleWalk.reachable(this.citizen.level(), origin,
+                SEARCH_HORIZONTAL + 1, SEARCH_VERTICAL + 1, WALK_NODE_LIMIT, null);
         BlockPos skipped = this.skipTarget;
         this.skipTarget = null;
 
@@ -249,6 +251,9 @@ public class CitizenMiningGoal extends Goal {
             // Nearest first, but only if the citizen could actually see it from where it
             // would stand. Without this citizens reach straight through walls.
             if (!this.canSeeFromSpot(spot, candidate)) {
+                continue;
+            }
+            if (!this.keepsEscapeRoute(spot, candidate)) {
                 continue;
             }
             this.targetBlock = candidate;
@@ -363,61 +368,48 @@ public class CitizenMiningGoal extends Goal {
         return best;
     }
 
-    // ---------------------------------------------------------------- reversible walk
+    // ---------------------------------------------------------------- staying un-trapped
 
     /**
-     * Flood fills the standing positions the citizen can walk to. Every step is one
-     * block horizontally with at most one block of rise or drop, so each step can be
-     * walked in reverse and the citizen can always get back.
+     * Whether the citizen could still walk out after taking this block. Mining changes the
+     * ground the reversible-walk rule is judged against, so without this a citizen can dig
+     * away the very step it needs to climb back up.
      */
-    private Set<BlockPos> walkableSpots(BlockPos origin) {
-        Set<BlockPos> visited = new HashSet<>();
-        Deque<BlockPos> queue = new ArrayDeque<>();
-        visited.add(origin);
-        queue.add(origin);
-
-        while (!queue.isEmpty() && visited.size() < WALK_NODE_LIMIT) {
-            BlockPos current = queue.poll();
-            for (Direction direction : Direction.Plane.HORIZONTAL) {
-                for (int dy : new int[]{0, 1, -1}) {
-                    BlockPos next = current.relative(direction).above(dy);
-                    if (!this.withinSearchBox(origin, next) || visited.contains(next)) {
-                        continue;
-                    }
-                    if (!this.canStandAt(next)) {
-                        continue;
-                    }
-                    // Climbing needs the space above the citizen's head to be clear as well.
-                    if (dy > 0 && !this.isPassable(current.above(2))) {
-                        continue;
-                    }
-                    visited.add(next);
-                    queue.add(next);
-                    break;
-                }
-            }
-        }
-        return visited;
-    }
-
-    private boolean withinSearchBox(BlockPos origin, BlockPos pos) {
-        return Math.abs(pos.getX() - origin.getX()) <= SEARCH_HORIZONTAL + 1
-                && Math.abs(pos.getZ() - origin.getZ()) <= SEARCH_HORIZONTAL + 1
-                && Math.abs(pos.getY() - origin.getY()) <= SEARCH_VERTICAL + 1;
-    }
-
-    private boolean canStandAt(BlockPos pos) {
+    private boolean keepsEscapeRoute(BlockPos spot, BlockPos target) {
         Level level = this.citizen.level();
-        BlockPos floor = pos.below();
-        if (!level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)) {
+        // Cheap first pass: taking the block must not leave the standing spot walled in.
+        if (!ReversibleWalk.hasAnyStep(level, spot, target)) {
             return false;
         }
-        return this.isPassable(pos) && this.isPassable(pos.above());
+
+        BlockPos anchor = this.findAnchor(spot, target);
+        if (anchor == null) {
+            return true;
+        }
+        return ReversibleWalk.reachable(level, spot, SAFETY_HORIZONTAL, SAFETY_VERTICAL,
+                SAFETY_NODE_LIMIT, target).contains(anchor);
     }
 
-    private boolean isPassable(BlockPos pos) {
+    /**
+     * The oldest ground the citizen is known to have stood on that is still within reach of
+     * the safety check. Older is better: it is further back along the way the citizen came.
+     */
+    @Nullable
+    private BlockPos findAnchor(BlockPos spot, BlockPos target) {
         Level level = this.citizen.level();
-        BlockState state = level.getBlockState(pos);
-        return state.getFluidState().isEmpty() && state.isPathfindable(level, pos, PathComputationType.LAND);
+        for (BlockPos crumb : this.citizen.getBreadcrumbs()) {
+            if (crumb.equals(spot)) {
+                continue;
+            }
+            if (Math.abs(crumb.getX() - spot.getX()) > SAFETY_HORIZONTAL
+                    || Math.abs(crumb.getZ() - spot.getZ()) > SAFETY_HORIZONTAL
+                    || Math.abs(crumb.getY() - spot.getY()) > SAFETY_VERTICAL) {
+                continue;
+            }
+            if (ReversibleWalk.canStandAt(level, crumb, target)) {
+                return crumb;
+            }
+        }
+        return null;
     }
 }

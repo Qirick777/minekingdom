@@ -1,6 +1,7 @@
 package com.minekingdom.entity;
 
 import com.minekingdom.MineKingdom;
+import com.minekingdom.entity.ai.CitizenEscapeGoal;
 import com.minekingdom.entity.ai.CitizenMiningGoal;
 import com.minekingdom.entity.ai.CitizenReturnGoal;
 import com.minekingdom.entity.task.CitizenTask;
@@ -47,6 +48,8 @@ import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -66,6 +69,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
             SynchedEntityData.defineId(CitizenEntity.class, EntityDataSerializers.BOOLEAN);
     private static final UniformInt PERSISTENT_ANGER_TIME = TimeUtil.rangeOfSeconds(20, 39);
     private static final float BARE_HAND_DIG_SPEED = 1.0F;
+    private static final int BREADCRUMB_LIMIT = 24;
     /** How close a citizen has to get before a return counts as made. */
     public static final double RETURN_ARRIVAL_DISTANCE = 1.5D;
 
@@ -75,6 +79,8 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     @Nullable
     private BlockPos returnPoint;
     private int minedBlocks;
+    /** Recently occupied standing positions, oldest first, used as proven-good ground to keep reachable. */
+    private final Deque<BlockPos> breadcrumbs = new ArrayDeque<>();
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -106,12 +112,14 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.goalSelector.addGoal(0, new FloatGoal(this));
         this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, true));
         this.goalSelector.addGoal(2, new OpenDoorGoal(this, true));
-        this.goalSelector.addGoal(3, new CitizenReturnGoal(this, 1.0D));
+        // Outranks the work goals: a walled-in citizen has to dig itself out before anything else.
+        this.goalSelector.addGoal(3, new CitizenEscapeGoal(this));
+        this.goalSelector.addGoal(4, new CitizenReturnGoal(this, 1.0D));
         // Sits above strolling: when it finds nothing to mine it stands down and the citizen wanders.
-        this.goalSelector.addGoal(4, new CitizenMiningGoal(this, 0.9D));
-        this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.9D));
-        this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8.0F));
-        this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
+        this.goalSelector.addGoal(5, new CitizenMiningGoal(this, 0.9D));
+        this.goalSelector.addGoal(6, new WaterAvoidingRandomStrollGoal(this, 0.9D));
+        this.goalSelector.addGoal(7, new LookAtPlayerGoal(this, Player.class, 8.0F));
+        this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
 
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this).setAlertOthers());
         this.targetSelector.addGoal(2, new ResetUniversalAngerTargetGoal<>(this, true));
@@ -122,7 +130,24 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         if (this.level() instanceof ServerLevel serverLevel) {
             this.updatePersistentAnger(serverLevel, true);
         }
+        this.recordBreadcrumb();
         super.customServerAiStep();
+    }
+
+    private void recordBreadcrumb() {
+        BlockPos pos = this.blockPosition();
+        if (pos.equals(this.breadcrumbs.peekLast())) {
+            return;
+        }
+        this.breadcrumbs.addLast(pos);
+        while (this.breadcrumbs.size() > BREADCRUMB_LIMIT) {
+            this.breadcrumbs.removeFirst();
+        }
+    }
+
+    /** Where this citizen has recently stood, oldest first. */
+    public Iterable<BlockPos> getBreadcrumbs() {
+        return this.breadcrumbs;
     }
 
     @Override
