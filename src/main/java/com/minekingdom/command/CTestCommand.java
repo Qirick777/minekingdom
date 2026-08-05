@@ -1,6 +1,7 @@
 package com.minekingdom.command;
 
 import com.minekingdom.entity.CitizenEntity;
+import com.minekingdom.entity.task.CitizenAssignment;
 import com.minekingdom.entity.task.CitizenTask;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
@@ -44,13 +45,20 @@ public final class CTestCommand {
                                                 IntegerArgumentType.getInteger(context, "count"))))))
                 .then(Commands.literal("mining")
                         .then(Commands.literal("start")
-                                .executes(context -> assign(context, CitizenTask.MINING)))
+                                .executes(context -> put(context, CitizenAssignment.MINING)))
                         .then(Commands.literal("stop")
-                                .executes(context -> assign(context, CitizenTask.IDLE)))
+                                .executes(context -> put(context, CitizenAssignment.NONE)))
                         .then(Commands.literal("report")
                                 .executes(CTestCommand::minedReport))
                         .then(Commands.literal("reset")
                                 .executes(CTestCommand::resetMined)))
+                // Experimental: the same work, but heading home now and then and whenever
+                // there is nowhere left to put anything.
+                .then(Commands.literal("mining2")
+                        .then(Commands.literal("start")
+                                .executes(context -> put(context, CitizenAssignment.MINING_WITH_RETURN)))
+                        .then(Commands.literal("stop")
+                                .executes(context -> put(context, CitizenAssignment.NONE))))
                 .then(Commands.literal("home")
                         .then(Commands.literal("set")
                                 .executes(CTestCommand::setHome))
@@ -109,14 +117,23 @@ public final class CTestCommand {
             if (citizen.isStuck()) {
                 stuck++;
             }
-            String line = String.format("mined=%d task=%s stuck=%b pos=%.1f,%.1f,%.1f",
-                    mined, citizen.getTask().getSerializedName(), citizen.isStuck(),
+            String line = String.format("mined=%d job=%s task=%s trips=%d/%d stuck=%b pos=%.1f,%.1f,%.1f",
+                    mined, citizen.getAssignment().getSerializedName(), citizen.getTask().getSerializedName(),
+                    citizen.getReturnArrivals(), citizen.getReturnTrips(), citizen.isStuck(),
                     citizen.getX(), citizen.getY(), citizen.getZ());
             source.sendSuccess(() -> Component.literal(line), false);
         }
 
-        String summary = String.format("MINED_SUMMARY total=%d citizens=%d mined_none=%d stuck=%d",
-                total, citizens.size(), idle, stuck);
+        int trips = 0;
+        int arrivals = 0;
+        for (CitizenEntity citizen : citizens) {
+            trips += citizen.getReturnTrips();
+            arrivals += citizen.getReturnArrivals();
+        }
+        String summary = String.format("MINED_SUMMARY total=%d citizens=%d mined_none=%d stuck=%d "
+                        + "trips=%d arrived=%d rate=%s",
+                total, citizens.size(), idle, stuck, trips, arrivals,
+                trips == 0 ? "n/a" : String.format("%.1f%%", 100.0 * arrivals / trips));
         source.sendSuccess(() -> Component.literal(summary), false);
         return total;
     }
@@ -216,6 +233,25 @@ public final class CTestCommand {
             source.sendSuccess(() -> Component.literal(line), false);
         }
         return citizens.size();
+    }
+
+    /** Puts the selection to work, or calls it off. */
+    private static int put(CommandContext<CommandSourceStack> context, CitizenAssignment assignment) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+
+        citizens.forEach(citizen -> citizen.setAssignment(assignment));
+
+        int count = citizens.size();
+        String key = assignment == CitizenAssignment.NONE
+                ? "commands.minekingdom.ctest.mining.stop"
+                : "commands.minekingdom.ctest.mining.start";
+        source.sendSuccess(() -> Component.translatable(key, count), true);
+        return count;
     }
 
     private static int assign(CommandContext<CommandSourceStack> context, CitizenTask task) {

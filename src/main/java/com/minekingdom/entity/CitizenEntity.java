@@ -5,6 +5,7 @@ import com.minekingdom.entity.ai.CitizenEscapeGoal;
 import com.minekingdom.entity.ai.CitizenMiningGoal;
 import com.minekingdom.entity.ai.CitizenPathMemory;
 import com.minekingdom.entity.ai.CitizenReturnGoal;
+import com.minekingdom.entity.task.CitizenAssignment;
 import com.minekingdom.entity.task.CitizenTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -70,10 +71,23 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private static final float BARE_HAND_DIG_SPEED = 1.0F;
     /** How close a citizen has to get before a return counts as made. */
     public static final double RETURN_ARRIVAL_DISTANCE = 1.5D;
+    /** No thought of heading back for the first couple of minutes of a shift. */
+    private static final int RETURN_WARMUP_TICKS = 2400;
+    /**
+     * After the warm-up the chance of turning for home rises with every tick worked, which
+     * puts the middle of the spread at five minutes with citizens setting off between
+     * roughly three and seven and a half. A flat chance would have some leaving almost at
+     * once and others staying out for twenty minutes.
+     */
+    private static final double RETURN_URGE_PER_TICK = 1.07E-7D;
 
     private final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
     private int selectedSlot;
     private CitizenTask task = CitizenTask.IDLE;
+    private CitizenAssignment assignment = CitizenAssignment.NONE;
+    private int workTicks;
+    private int returnTrips;
+    private int returnArrivals;
     @Nullable
     private BlockPos returnPoint;
     private int minedBlocks;
@@ -133,6 +147,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
             this.updatePersistentAnger(serverLevel, true);
         }
         this.pathMemory.record(this.blockPosition());
+        this.tickReturnUrge();
         super.customServerAiStep();
     }
 
@@ -175,11 +190,62 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
      * jobs, workplace blocks or anything else can drive citizens the same way.
      */
     public void setTask(CitizenTask task) {
-        if (task != this.task) {
-            // The way here was remembered for the last errand; the next one starts afresh.
+        this.task = task;
+        if (task == CitizenTask.IDLE) {
             this.pathMemory.clear();
         }
-        this.task = task;
+    }
+
+    public CitizenAssignment getAssignment() {
+        return this.assignment;
+    }
+
+    /** Puts a citizen to work, or calls it off. The activity follows from the assignment. */
+    public void setAssignment(CitizenAssignment assignment) {
+        this.assignment = assignment;
+        this.workTicks = 0;
+        this.pathMemory.clear();
+        this.setTask(assignment == CitizenAssignment.NONE ? CitizenTask.IDLE : CitizenTask.MINING);
+    }
+
+    public int getReturnTrips() {
+        return this.returnTrips;
+    }
+
+    public int getReturnArrivals() {
+        return this.returnArrivals;
+    }
+
+    /** Nowhere left to put anything, which is reason enough to head back. */
+    public boolean isInventoryFull() {
+        for (int i = 0; i < this.inventory.getContainerSize(); i++) {
+            if (this.inventory.getItem(i).isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void tickReturnUrge() {
+        if (this.assignment != CitizenAssignment.MINING_WITH_RETURN || this.task != CitizenTask.MINING) {
+            return;
+        }
+        if (this.returnPoint == null) {
+            return;
+        }
+
+        this.workTicks++;
+        if (this.isInventoryFull()) {
+            this.setTask(CitizenTask.RETURNING);
+            return;
+        }
+        if (this.workTicks <= RETURN_WARMUP_TICKS) {
+            return;
+        }
+        double urge = RETURN_URGE_PER_TICK * (this.workTicks - RETURN_WARMUP_TICKS);
+        if (this.random.nextDouble() < urge) {
+            this.setTask(CitizenTask.RETURNING);
+        }
     }
 
     public boolean isMining() {
@@ -230,7 +296,19 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     public void finishReturn(boolean arrived, int ticks, double startDistance, int blocksPlaced) {
         this.returnOutcome = arrived ? "arrived" : "gave_up";
         this.returnBlocksPlaced = blocksPlaced;
-        this.setTask(CitizenTask.IDLE);
+        this.returnTrips++;
+        if (arrived) {
+            this.returnArrivals++;
+        }
+        // The trip is over either way, so the way it went is no longer worth keeping.
+        this.pathMemory.clear();
+        this.workTicks = 0;
+        if (this.assignment == CitizenAssignment.MINING_WITH_RETURN) {
+            // Back to work: a failed trip must not leave a citizen standing about.
+            this.setTask(CitizenTask.MINING);
+        } else {
+            this.setTask(CitizenTask.IDLE);
+        }
         if (arrived) {
             MineKingdom.LOGGER.info("Citizen {} returned to {} after {} ticks, having set out {} blocks away, "
                             + "standing {} it and stacking {} block(s) on the way",
@@ -494,6 +572,10 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.writeInventoryToTag(tag);
         this.addPersistentAngerSaveData(tag);
         tag.putString("Task", this.task.getSerializedName());
+        tag.putString("Assignment", this.assignment.getSerializedName());
+        tag.putInt("WorkTicks", this.workTicks);
+        tag.putInt("ReturnTrips", this.returnTrips);
+        tag.putInt("ReturnArrivals", this.returnArrivals);
         tag.putInt("MinedBlocks", this.minedBlocks);
         if (this.returnPoint != null) {
             tag.put("ReturnPoint", NbtUtils.writeBlockPos(this.returnPoint));
@@ -508,6 +590,10 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.setSelectedSlot(tag.getByte("SelectedSlot"));
         this.readPersistentAngerSaveData(this.level(), tag);
         this.setTask(CitizenTask.byName(tag.getString("Task")));
+        this.assignment = CitizenAssignment.byName(tag.getString("Assignment"));
+        this.workTicks = tag.getInt("WorkTicks");
+        this.returnTrips = tag.getInt("ReturnTrips");
+        this.returnArrivals = tag.getInt("ReturnArrivals");
         this.minedBlocks = tag.getInt("MinedBlocks");
         this.setReturnPoint(tag.contains("ReturnPoint") ? NbtUtils.readBlockPos(tag.getCompound("ReturnPoint")) : null);
     }
