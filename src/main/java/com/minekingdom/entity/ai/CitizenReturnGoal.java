@@ -52,6 +52,7 @@ public class CitizenReturnGoal extends Goal {
         this.elapsed = 0;
         this.reported = false;
         this.startDistance = this.citizen.distanceToReturnPoint();
+        this.citizen.beginReturnTrip();
         BlockPos home = this.citizen.getReturnPoint();
         if (home != null) {
             this.travel.setDestination(home, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
@@ -86,6 +87,6 @@ public class CitizenReturnGoal extends Goal {
     private void finish(boolean arrived) {
         this.reported = true;
         this.travel.stop();
-        this.citizen.finishReturn(arrived, this.elapsed, this.startDistance);
+        this.citizen.finishReturn(arrived, this.elapsed, this.startDistance, this.travel.blocksPlaced());
     }
 }

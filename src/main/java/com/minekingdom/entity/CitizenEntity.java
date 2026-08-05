@@ -78,6 +78,9 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private BlockPos returnPoint;
     private int minedBlocks;
     private boolean stuck;
+    /** How the last return trip ended, so a frozen citizen is not read as a successful one. */
+    private String returnOutcome = "none";
+    private int returnBlocksPlaced;
     /** The ground this citizen has walked over, kept walkable whatever it is working on. */
     private final CitizenPathMemory pathMemory = new CitizenPathMemory();
     private int remainingPersistentAngerTime;
@@ -224,16 +227,40 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
      * Ends a return trip and logs the outcome. The distance the citizen set out from is
      * included so a log line shows on its own whether a walk actually happened.
      */
-    public void finishReturn(boolean arrived, int ticks, double startDistance) {
+    public void finishReturn(boolean arrived, int ticks, double startDistance, int blocksPlaced) {
+        this.returnOutcome = arrived ? "arrived" : "gave_up";
+        this.returnBlocksPlaced = blocksPlaced;
         this.setTask(CitizenTask.IDLE);
         if (arrived) {
-            MineKingdom.LOGGER.info("Citizen {} returned to {} after {} ticks, having set out {} blocks away",
-                    this.getStringUUID(), this.returnPoint, ticks, String.format("%.2f", startDistance));
+            MineKingdom.LOGGER.info("Citizen {} returned to {} after {} ticks, having set out {} blocks away, "
+                            + "standing {} it and stacking {} block(s) on the way",
+                    this.getStringUUID(), this.returnPoint, ticks, String.format("%.2f", startDistance),
+                    this.isExactlyAtReturnPoint() ? "exactly on" : "beside", blocksPlaced);
         } else {
-            MineKingdom.LOGGER.info("Citizen {} gave up returning to {} after {} ticks, {} blocks short of it (set out {} blocks away)",
+            MineKingdom.LOGGER.info("Citizen {} gave up returning to {} after {} ticks, {} blocks short of it "
+                            + "(set out {} blocks away, stacked {} block(s))",
                     this.getStringUUID(), this.returnPoint, ticks,
-                    String.format("%.2f", this.distanceToReturnPoint()), String.format("%.2f", startDistance));
+                    String.format("%.2f", this.distanceToReturnPoint()), String.format("%.2f", startDistance),
+                    blocksPlaced);
         }
+    }
+
+    public String getReturnOutcome() {
+        return this.returnOutcome;
+    }
+
+    public int getReturnBlocksPlaced() {
+        return this.returnBlocksPlaced;
+    }
+
+    public void beginReturnTrip() {
+        this.returnOutcome = "travelling";
+        this.returnBlocksPlaced = 0;
+    }
+
+    /** Standing on the exact block it set out from, rather than merely near it. */
+    public boolean isExactlyAtReturnPoint() {
+        return this.returnPoint != null && this.blockPosition().equals(this.returnPoint);
     }
 
     /** Walled in with no way to dig or build out. Reported rather than left to look like idling. */

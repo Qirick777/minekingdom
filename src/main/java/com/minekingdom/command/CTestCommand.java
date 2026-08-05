@@ -164,8 +164,10 @@ public final class CTestCommand {
         }
 
         int home = 0;
+        int exact = 0;
         int away = 0;
         int unset = 0;
+        int placed = 0;
         for (CitizenEntity citizen : citizens) {
             double distance = citizen.distanceToReturnPoint();
             if (Double.isNaN(distance)) {
@@ -174,19 +176,27 @@ public final class CTestCommand {
                 continue;
             }
             boolean arrived = distance <= CitizenEntity.RETURN_ARRIVAL_DISTANCE;
+            boolean onTheSpot = citizen.isExactlyAtReturnPoint();
             if (arrived) {
                 home++;
             } else {
                 away++;
             }
-            String line = String.format("dist=%.2f %s task=%s home=%s pos=%.1f,%.1f,%.1f",
-                    distance, arrived ? "AT_HOME" : "AWAY", citizen.getTask().getSerializedName(),
-                    citizen.getReturnPoint(), citizen.getX(), citizen.getY(), citizen.getZ());
+            if (onTheSpot) {
+                exact++;
+            }
+            placed += citizen.getReturnBlocksPlaced();
+            String line = String.format("dist=%.2f %s exact=%b dy=%+d outcome=%s placed=%d task=%s home=%s pos=%.1f,%.1f,%.1f",
+                    distance, arrived ? "AT_HOME" : "AWAY", onTheSpot,
+                    citizen.blockPosition().getY() - citizen.getReturnPoint().getY(),
+                    citizen.getReturnOutcome(), citizen.getReturnBlocksPlaced(),
+                    citizen.getTask().getSerializedName(), citizen.getReturnPoint(),
+                    citizen.getX(), citizen.getY(), citizen.getZ());
             source.sendSuccess(() -> Component.literal(line), false);
         }
 
-        String summary = String.format("SUMMARY total=%d at_home=%d away=%d unset=%d tolerance=%.1f",
-                citizens.size(), home, away, unset, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
+        String summary = String.format("SUMMARY total=%d at_home=%d exact=%d away=%d unset=%d placed=%d tolerance=%.1f",
+                citizens.size(), home, exact, away, unset, placed, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
         source.sendSuccess(() -> Component.literal(summary), false);
         return home;
     }
