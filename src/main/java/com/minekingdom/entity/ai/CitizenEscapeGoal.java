@@ -4,21 +4,22 @@ import com.minekingdom.entity.CitizenEntity;
 import com.minekingdom.entity.task.CitizenTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.ai.goal.Goal;
-import net.minecraft.world.level.Level;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Last resort for a citizen that has walled itself in: jump and drop a block underfoot to
- * climb out, the way a player pillars up.
+ * Gets a citizen that has wedged itself somewhere back to ground it came from.
  *
- * <p>This is for a citizen with nowhere left to go and nothing left to dig. A citizen that
- * can still break stone is left to the mining goal, and one that has somewhere to be cuts
- * its own way there through {@link CitizenTravel}; only a citizen boxed in with neither
- * option gets here. With an empty inventory it cannot climb at all, which is why the stone
- * a citizen breaks and picks up matters.
+ * <p>Recovery is a journey like any other, so it goes through {@link CitizenTravel} towards
+ * somewhere the citizen is known to have stood. That matters: a route is only ever planned
+ * to a real place, so a citizen with nothing above it but sky produces no plan and simply
+ * stands rather than stacking blocks upwards forever. Digging and stacking still happen
+ * where a plan calls for them, and only there.
+ *
+ * <p>A citizen that can still break stone is left to the mining goal, and one that reports
+ * no way through at all is flagged as stuck rather than left looking idle.
  */
 public class CitizenEscapeGoal extends Goal {
     /** Calls to canUse without meaningful movement before a citizen counts as stuck. */
@@ -29,24 +30,23 @@ public class CitizenEscapeGoal extends Goal {
     private static final int NODE_LIMIT = 256;
     /** A reachable area no bigger than this counts as being boxed in rather than out in the open. */
     private static final int CONFINED_NODES = 24;
-    private static final int MAX_PILLAR = 8;
     /** How far around itself a citizen looks for something it could still dig through. */
     private static final int DIGGABLE_RADIUS = 2;
+    private static final int GIVE_UP_TICKS = 600;
 
     private final CitizenEntity citizen;
-    private final CitizenBlockBreaker breaker;
-    private final CitizenPillarBuilder pillar;
+    private final CitizenTravel travel;
 
     @Nullable
     private BlockPos lastPos;
     private int stillChecks;
     private int lastMined = -1;
+    private int elapsed;
 
-    public CitizenEscapeGoal(CitizenEntity citizen) {
+    public CitizenEscapeGoal(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
-        this.breaker = new CitizenBlockBreaker(citizen);
-        this.pillar = new CitizenPillarBuilder(citizen);
-        this.setFlags(EnumSet.of(Flag.MOVE, Flag.JUMP));
+        this.travel = new CitizenTravel(citizen, speedModifier);
+        this.setFlags(EnumSet.of(Flag.MOVE, Flag.JUMP, Flag.LOOK));
     }
 
     @Override
@@ -76,45 +76,20 @@ public class CitizenEscapeGoal extends Goal {
             return false;
         }
         // Being in a small space is not the same as being trapped: if there is still stone
-        // to break, the mining goal gets it out, and pillaring would only waste blocks.
+        // to break, the mining goal gets it out.
         if (this.hasSomethingToDig()) {
             this.citizen.setStuck(false);
             return false;
         }
 
-        // Either build upwards, or open the ceiling that is stopping the climb.
-        boolean canAct = this.pillar.hasHeadroom() ? this.pillar.canBuild() : this.ceilingIsBreakable();
-        this.citizen.setStuck(!canAct);
-        return canAct;
-    }
-
-    /** Any block close by that the citizen is allowed to break its way through. */
-    private boolean hasSomethingToDig() {
-        Level level = this.citizen.level();
-        BlockPos feet = this.citizen.blockPosition();
-        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
-        for (int dx = -DIGGABLE_RADIUS; dx <= DIGGABLE_RADIUS; dx++) {
-            for (int dy = -DIGGABLE_RADIUS; dy <= DIGGABLE_RADIUS; dy++) {
-                for (int dz = -DIGGABLE_RADIUS; dz <= DIGGABLE_RADIUS; dz++) {
-                    cursor.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
-                    if (dy < 0 && dx == 0 && dz == 0) {
-                        continue;   // its own footing is off limits anyway
-                    }
-                    if (CitizenMiningGoal.isBreakableSafely(level, cursor)) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
+        BlockPos wayOut = this.wayOut();
+        this.citizen.setStuck(wayOut == null);
+        return wayOut != null;
     }
 
     @Override
     public boolean canContinueToUse() {
-        if (this.pillar.placedCount() >= MAX_PILLAR || this.citizen.getTask() == CitizenTask.IDLE) {
-            return false;
-        }
-        return this.pillar.hasHeadroom() ? this.pillar.canBuild() : this.ceilingIsBreakable();
+        return this.citizen.getTask() != CitizenTask.IDLE && this.elapsed < GIVE_UP_TICKS;
     }
 
     @Override
@@ -124,48 +99,61 @@ public class CitizenEscapeGoal extends Goal {
 
     @Override
     public void start() {
-        this.pillar.reset();
-        this.citizen.getNavigation().stop();
+        this.elapsed = 0;
+        BlockPos wayOut = this.wayOut();
+        if (wayOut != null) {
+            this.travel.setDestination(wayOut, 1.5D);
+        }
     }
 
     @Override
     public void stop() {
-        this.breaker.reset();
-        this.pillar.reset();
+        this.travel.stop();
         this.stillChecks = 0;
         this.lastPos = null;
     }
 
     @Override
     public void tick() {
-        if (this.pillar.isMidJump()) {
-            this.pillar.tick();
-            return;
-        }
-        // A blocked ceiling has to come down before there is anywhere to climb to.
-        if (!this.pillar.hasHeadroom()) {
-            BlockPos ceiling = this.citizen.blockPosition().above(2);
-            this.citizen.getLookControl().setLookAt(ceiling.getX() + 0.5D, ceiling.getY() + 0.5D, ceiling.getZ() + 0.5D);
-            this.breaker.advance(ceiling);
-            return;
-        }
-
-        this.pillar.tick();
-        // Once there is a way up again there is no reason to keep building.
-        if (!this.isBoxedIn()) {
+        this.elapsed++;
+        CitizenTravel.Status status = this.travel.tick();
+        if (status == CitizenTravel.Status.ARRIVED) {
             this.citizen.setStuck(false);
+            this.elapsed = GIVE_UP_TICKS;
+        } else if (status == CitizenTravel.Status.STUCK) {
+            // Nothing can be done from here; say so and let other goals have a turn.
+            this.citizen.setStuck(true);
+            this.elapsed = GIVE_UP_TICKS;
         }
     }
 
-
-
-
-    /** The block right above the citizen's head, when it is one a citizen may take out. */
-    private boolean ceilingIsBreakable() {
-        BlockPos ceiling = this.citizen.blockPosition().above(2);
-        return CitizenMiningGoal.isBreakableSafely(this.citizen.level(), ceiling);
+    /** Ground the citizen is known to have stood on, which is somewhere worth aiming for. */
+    @Nullable
+    private BlockPos wayOut() {
+        BlockPos anchor = this.citizen.getPathMemory()
+                .oldestWithin(this.citizen.blockPosition(), SEARCH_HORIZONTAL * 2, SEARCH_VERTICAL * 2);
+        return anchor != null ? anchor : this.citizen.getReturnPoint();
     }
 
+    /** Any block close by that the citizen is allowed to break its way through. */
+    private boolean hasSomethingToDig() {
+        BlockPos feet = this.citizen.blockPosition();
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (int dx = -DIGGABLE_RADIUS; dx <= DIGGABLE_RADIUS; dx++) {
+            for (int dy = -DIGGABLE_RADIUS; dy <= DIGGABLE_RADIUS; dy++) {
+                for (int dz = -DIGGABLE_RADIUS; dz <= DIGGABLE_RADIUS; dz++) {
+                    cursor.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
+                    if (dy < 0 && dx == 0 && dz == 0) {
+                        continue;   // its own footing is off limits anyway
+                    }
+                    if (CitizenMiningGoal.isBreakableSafely(this.citizen.level(), cursor)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
 
     /** Confined to a small pocket with nothing higher than the citizen within walking reach. */
     private boolean isBoxedIn() {

@@ -115,7 +115,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, true));
         this.goalSelector.addGoal(2, new OpenDoorGoal(this, true));
         // Outranks the work goals: a walled-in citizen has to dig itself out before anything else.
-        this.goalSelector.addGoal(3, new CitizenEscapeGoal(this));
+        this.goalSelector.addGoal(3, new CitizenEscapeGoal(this, 1.0D));
         this.goalSelector.addGoal(4, new CitizenReturnGoal(this, 1.0D));
         // Sits above strolling: when it finds nothing to mine it stands down and the citizen wanders.
         this.goalSelector.addGoal(5, new CitizenMiningGoal(this, 0.9D));

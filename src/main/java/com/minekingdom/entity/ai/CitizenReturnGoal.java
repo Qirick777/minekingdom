@@ -18,11 +18,17 @@ import java.util.EnumSet;
  */
 public class CitizenReturnGoal extends Goal {
     private static final int GIVE_UP_TICKS = 3600;
+    /**
+     * Holding on with nothing to do keeps every other goal shut out, which is what left
+     * citizens standing perfectly still until something hit them.
+     */
+    private static final int STUCK_PATIENCE = 100;
 
     private final CitizenEntity citizen;
     private final CitizenTravel travel;
     private int elapsed;
     private double startDistance;
+    private int stuckTicks;
     /** Arrival is reported once per trip, even though the goal may tick again before it is stopped. */
     private boolean reported;
 
@@ -50,6 +56,7 @@ public class CitizenReturnGoal extends Goal {
     @Override
     public void start() {
         this.elapsed = 0;
+        this.stuckTicks = 0;
         this.reported = false;
         this.startDistance = this.citizen.distanceToReturnPoint();
         this.citizen.beginReturnTrip();
@@ -79,9 +86,19 @@ public class CitizenReturnGoal extends Goal {
             return;
         }
 
-        if (this.travel.tick() == CitizenTravel.Status.ARRIVED) {
+        CitizenTravel.Status status = this.travel.tick();
+        if (status == CitizenTravel.Status.ARRIVED) {
             this.finish(true);
+            return;
         }
+        if (status == CitizenTravel.Status.STUCK) {
+            if (++this.stuckTicks > STUCK_PATIENCE) {
+                this.citizen.setStuck(true);
+                this.finish(false);
+            }
+            return;
+        }
+        this.stuckTicks = 0;
     }
 
     private void finish(boolean arrived) {

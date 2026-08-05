@@ -163,6 +163,19 @@ public final class CitizenRoutePlanner {
             }
         }
 
+        // Down through its own footing, which is how anyone gets off a pillar they built.
+        // Only one block at a time, so the citizen steps down rather than falling.
+        BlockPos below = from.below();
+        if (!outside(origin, below, horizontal, vertical) && isDiggable(level, below)) {
+            BlockPos landing = below.below();
+            BlockState landingState = level.getBlockState(landing);
+            if (landingState.isFaceSturdy(level, landing, Direction.UP)) {
+                Set<BlockPos> clear = new HashSet<>();
+                clear.add(below.immutable());
+                edges.add(new Edge(below, MOVE_COST + cost(level, clear), List.copyOf(clear), false));
+            }
+        }
+
         if (canBuild) {
             BlockPos above = from.above();
             if (!outside(origin, above, horizontal, vertical)) {

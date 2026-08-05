@@ -18,6 +18,12 @@ import org.jetbrains.annotations.Nullable;
  */
 public class CitizenPillarBuilder {
     private static final int JUMP_TIMEOUT = 20;
+    /**
+     * A hard ceiling on stacking for one errand. Nothing a citizen legitimately needs takes
+     * anywhere near this many, so hitting it means something has gone wrong, and without it
+     * a citizen that keeps deciding it is stuck builds a tower into the sky.
+     */
+    private static final int MAX_PER_ERRAND = 12;
 
     private final CitizenEntity citizen;
 
@@ -31,7 +37,11 @@ public class CitizenPillarBuilder {
     }
 
     public boolean canBuild() {
-        return this.buildingSlot() >= 0;
+        return this.placed < MAX_PER_ERRAND && this.buildingSlot() >= 0;
+    }
+
+    public boolean hitBuildLimit() {
+        return this.placed >= MAX_PER_ERRAND;
     }
 
     public int placedCount() {
