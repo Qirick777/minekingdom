@@ -7,19 +7,25 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.pathfinder.PathComputationType;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.common.Tags;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -40,9 +46,12 @@ public class CitizenMiningGoal extends Goal {
     private static final int SEARCH_HORIZONTAL = 6;
     private static final int SEARCH_VERTICAL = 3;
     private static final int WALK_NODE_LIMIT = 768;
-    private static final double MINING_REACH = 4.5D;
+    /** Short enough that citizens mine what they are standing next to, not across a room. */
+    private static final double MINING_REACH = 3.0D;
     private static final int RESCAN_INTERVAL = 20;
     private static final int APPROACH_TIMEOUT = 200;
+    /** Caps the ray casts spent looking for a visible block in one search. */
+    private static final int MAX_SIGHT_CHECKS = 16;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -120,7 +129,9 @@ public class CitizenMiningGoal extends Goal {
         Vec3 center = Vec3.atCenterOf(target);
         this.citizen.getLookControl().setLookAt(center.x, center.y, center.z);
 
-        if (this.withinReach(target)) {
+        // Both conditions matter: close enough, and actually looking at it. Reach alone let
+        // citizens break blocks on the far side of a wall without ever walking round.
+        if (this.withinReach(target) && this.canSeeFrom(this.citizen.getEyePosition(), target)) {
             this.citizen.getNavigation().stop();
             this.mineTick(target);
             return;
@@ -176,6 +187,11 @@ public class CitizenMiningGoal extends Goal {
             this.targetBlock = null;
             this.standSpot = null;
             this.skipTarget = null;
+            // Line up the next block straight away. Ending the goal here instead left the
+            // citizen standing idle through the rescan delay after every single block.
+            if (this.findTarget()) {
+                this.approachTicks = 0;
+            }
         }
     }
 
@@ -198,42 +214,74 @@ public class CitizenMiningGoal extends Goal {
 
     private boolean findTarget() {
         this.rescanCooldown = RESCAN_INTERVAL;
+        this.targetBlock = null;
+        this.standSpot = null;
 
         BlockPos origin = this.citizen.blockPosition();
         Set<BlockPos> reachable = this.walkableSpots(origin);
         BlockPos skipped = this.skipTarget;
         this.skipTarget = null;
 
-        BlockPos bestBlock = null;
-        BlockPos bestSpot = null;
-        double bestDistance = Double.MAX_VALUE;
-
+        List<BlockPos> candidates = new ArrayList<>();
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         for (int dx = -SEARCH_HORIZONTAL; dx <= SEARCH_HORIZONTAL; dx++) {
             for (int dy = -SEARCH_VERTICAL; dy <= SEARCH_VERTICAL; dy++) {
                 for (int dz = -SEARCH_HORIZONTAL; dz <= SEARCH_HORIZONTAL; dz++) {
                     cursor.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
-                    double distance = cursor.distSqr(origin);
-                    if (distance >= bestDistance || cursor.equals(skipped)) {
+                    if (cursor.equals(skipped) || !this.isMineableTarget(cursor) || !this.isExposed(cursor)) {
                         continue;
                     }
-                    if (!this.isMineableTarget(cursor) || !this.isExposed(cursor)) {
-                        continue;
-                    }
-                    BlockPos spot = this.findStandSpot(cursor, reachable);
-                    if (spot == null) {
-                        continue;
-                    }
-                    bestBlock = cursor.immutable();
-                    bestSpot = spot;
-                    bestDistance = distance;
+                    candidates.add(cursor.immutable());
                 }
             }
         }
+        candidates.sort(Comparator.comparingDouble(candidate -> candidate.distSqr(origin)));
 
-        this.targetBlock = bestBlock;
-        this.standSpot = bestSpot;
-        return bestBlock != null;
+        int sightChecks = 0;
+        for (BlockPos candidate : candidates) {
+            BlockPos spot = this.findStandSpot(candidate, reachable);
+            if (spot == null) {
+                continue;
+            }
+            if (++sightChecks > MAX_SIGHT_CHECKS) {
+                break;
+            }
+            // Nearest first, but only if the citizen could actually see it from where it
+            // would stand. Without this citizens reach straight through walls.
+            if (!this.canSeeFromSpot(spot, candidate)) {
+                continue;
+            }
+            this.targetBlock = candidate;
+            this.standSpot = spot;
+            return true;
+        }
+        return false;
+    }
+
+    private boolean canSeeFromSpot(BlockPos spot, BlockPos target) {
+        Vec3 eye = new Vec3(spot.getX() + 0.5D, spot.getY() + this.citizen.getEyeHeight(), spot.getZ() + 0.5D);
+        return this.canSeeFrom(eye, target);
+    }
+
+    /** Whether an exposed face of the block is in plain sight from the given eye position. */
+    private boolean canSeeFrom(Vec3 eye, BlockPos target) {
+        Level level = this.citizen.level();
+        Vec3 center = Vec3.atCenterOf(target);
+
+        for (Direction direction : Direction.values()) {
+            if (!level.getBlockState(target.relative(direction)).isAir()) {
+                continue;
+            }
+            // Aim just past the face into the open air beside it, so an unobstructed
+            // line of sight registers as hitting nothing at all.
+            Vec3 aim = center.add(Vec3.atLowerCornerOf(direction.getNormal()).scale(0.55D));
+            BlockHitResult hit = level.clip(new ClipContext(eye, aim,
+                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this.citizen));
+            if (hit.getType() == HitResult.Type.MISS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Everything except exposure, which only ever increases once mining starts. */
