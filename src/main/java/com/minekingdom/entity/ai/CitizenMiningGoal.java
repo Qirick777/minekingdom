@@ -29,7 +29,8 @@ import java.util.Set;
  *
  * <p>The rules, in the order they are applied while picking a block:
  * <ol>
- *   <li>only exposed stone/ore counts as a target, nearest first;</li>
+ *   <li>only exposed stone/ore counts as a target; ore comes first, then whatever leaves
+ *       the citizen at least as many places to stand as before, nearest first inside each;</li>
  *   <li>never the block underfoot, nor anything in the column the citizen stands on;</li>
  *   <li>never a block that would let liquid through or drop sand/gravel from above;</li>
  *   <li>the citizen must be able to walk to a spot beside it using steps of at most
@@ -50,6 +51,16 @@ public class CitizenMiningGoal extends Goal {
     private static final int APPROACH_TIMEOUT = 200;
     /** Caps the ray casts spent looking for a visible block in one search. */
     private static final int MAX_SIGHT_CHECKS = 16;
+    /**
+     * Ore gets looked at first but on its own allowance, so a vein walled off behind stone
+     * cannot swallow the whole sight budget and leave the block at arm's length unexamined.
+     */
+    private static final int MAX_ORE_SIGHT_CHECKS = 8;
+    /**
+     * How many of the nearest non-ore candidates get their standing-room effect worked out.
+     * Everything past this is treated as harmless, which is what it nearly always is.
+     */
+    private static final int MOBILITY_BUDGET = 24;
     private static final int SAFETY_HORIZONTAL = 8;
     private static final int SAFETY_VERTICAL = 5;
     private static final int SAFETY_NODE_LIMIT = 512;
@@ -241,17 +252,26 @@ public class CitizenMiningGoal extends Goal {
             }
         }
         candidates.sort(Comparator.comparingDouble(candidate -> candidate.distSqr(origin)));
+        Ranking ranking = this.rank(candidates);
+        List<BlockPos> ordered = ranking.ordered();
+        int ores = ranking.ores();
 
         int sightChecks = 0;
-        for (BlockPos candidate : candidates) {
+        int oreChecks = 0;
+        for (int i = 0; i < ordered.size(); i++) {
+            BlockPos candidate = ordered.get(i);
             BlockPos spot = this.findStandSpot(candidate, reachable);
             if (spot == null) {
                 continue;
             }
-            if (++sightChecks > MAX_SIGHT_CHECKS) {
+            if (i < ores) {
+                if (++oreChecks > MAX_ORE_SIGHT_CHECKS) {
+                    continue;
+                }
+            } else if (++sightChecks > MAX_SIGHT_CHECKS) {
                 break;
             }
-            // Nearest first, but only if the citizen could actually see it from where it
+            // Preferred first, but only if the citizen could actually see it from where it
             // would stand. Without this citizens reach straight through walls.
             if (!this.canSeeFromSpot(spot, candidate)) {
                 continue;
@@ -264,6 +284,63 @@ public class CitizenMiningGoal extends Goal {
             return true;
         }
         return false;
+    }
+
+    /** Candidates in the order they should be considered, and how many of them are ore. */
+    private record Ranking(List<BlockPos> ordered, int ores) {
+    }
+
+    /**
+     * Sorts candidates that have already been put in nearest-first order into three bands:
+     * ore, then anything whose removal leaves the citizen no worse off for places to stand,
+     * then the rest. Distance still decides inside each band.
+     *
+     * <p>The middle band is the point of the exercise. Taking a block can only ever change
+     * whether a citizen can stand at three positions, and the one case worth avoiding is the
+     * block that leaves fewer than it found — the floor a citizen digs out from under the
+     * step it needed. Preferring the others keeps workings open instead of narrow.
+     */
+    private Ranking rank(List<BlockPos> candidates) {
+        Level level = this.citizen.level();
+        List<BlockPos> ores = new ArrayList<>();
+        List<BlockPos> keeps = new ArrayList<>();
+        List<BlockPos> shrinks = new ArrayList<>();
+        int measured = 0;
+
+        for (BlockPos candidate : candidates) {
+            if (level.getBlockState(candidate).is(Tags.Blocks.ORES)) {
+                ores.add(candidate);
+            } else if (measured < MOBILITY_BUDGET) {
+                measured++;
+                (standingRoomDelta(level, candidate) < 0 ? shrinks : keeps).add(candidate);
+            } else {
+                keeps.add(candidate);
+            }
+        }
+
+        List<BlockPos> ordered = new ArrayList<>(candidates.size());
+        ordered.addAll(ores);
+        ordered.addAll(keeps);
+        ordered.addAll(shrinks);
+        return new Ranking(ordered, ores.size());
+    }
+
+    /**
+     * The change in places a citizen could stand if this block went away. Only the block
+     * itself and its immediate neighbours above and below can possibly change, so this is
+     * a handful of lookups rather than a search.
+     */
+    private static int standingRoomDelta(Level level, BlockPos pos) {
+        int delta = 0;
+        for (BlockPos spot : new BlockPos[]{pos.above(), pos, pos.below()}) {
+            if (ReversibleWalk.canStandAt(level, spot, pos)) {
+                delta++;
+            }
+            if (ReversibleWalk.canStandAt(level, spot, null)) {
+                delta--;
+            }
+        }
+        return delta;
     }
 
     private boolean canSeeFromSpot(BlockPos spot, BlockPos target) {
