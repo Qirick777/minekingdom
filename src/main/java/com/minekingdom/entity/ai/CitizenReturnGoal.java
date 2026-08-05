@@ -19,6 +19,8 @@ import java.util.EnumSet;
 public class CitizenReturnGoal extends Goal {
     private static final int REPATH_INTERVAL = 20;
     private static final int GIVE_UP_TICKS = 2400;
+    /** Within this range the citizen walks straight at the point instead of pathfinding to it. */
+    private static final double CLOSE_RANGE = 4.0D;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -84,6 +86,13 @@ public class CitizenReturnGoal extends Goal {
 
         Vec3 center = Vec3.atCenterOf(home);
         this.citizen.getLookControl().setLookAt(center.x, center.y, center.z);
+
+        // Pathfinding treats an adjacent block as arrival and stops, leaving the citizen a
+        // block short of the spot it set out from. Close that last stretch by steering directly.
+        if (this.citizen.distanceToReturnPoint() < CLOSE_RANGE) {
+            this.citizen.getMoveControl().setWantedPosition(center.x, home.getY(), center.z, this.speedModifier);
+            return;
+        }
 
         if (--this.repathCooldown <= 0) {
             this.repathCooldown = REPATH_INTERVAL;
