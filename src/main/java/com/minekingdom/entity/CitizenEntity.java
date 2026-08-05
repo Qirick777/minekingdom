@@ -350,6 +350,10 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         // The trip is over either way, so the way it went is no longer worth keeping.
         this.pathMemory.clear();
         this.workTicks = 0;
+        // A trip that ran out of time leaves the citizen where it failed, which is worth
+        // going on saying: the flag is what lets the escape goal keep working on a citizen
+        // no job would otherwise touch again.
+        this.setStuck(!arrived);
         if (this.assignment == CitizenAssignment.MINING_WITH_RETURN) {
             // Back to work: a failed trip must not leave a citizen standing about.
             this.setTask(CitizenTask.MINING);
