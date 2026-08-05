@@ -204,6 +204,8 @@ public final class CTestCommand {
         int away = 0;
         int unset = 0;
         int placed = 0;
+        int made = 0;
+        int failed = 0;
         for (CitizenEntity citizen : citizens) {
             double distance = citizen.distanceToReturnPoint();
             if (Double.isNaN(distance)) {
@@ -222,6 +224,14 @@ public final class CTestCommand {
                 exact++;
             }
             placed += citizen.getReturnBlocksPlaced();
+            // How the trip ended, which is not the same as where the citizen is standing
+            // now: one that got home goes idle and strolls off, and was being counted as a
+            // failure for being 1.8 blocks away half an hour later.
+            if ("arrived".equals(citizen.getReturnOutcome())) {
+                made++;
+            } else if ("gave_up".equals(citizen.getReturnOutcome())) {
+                failed++;
+            }
             String line = String.format("dist=%.2f %s exact=%b dy=%+d outcome=%s placed=%d task=%s home=%s pos=%.1f,%.1f,%.1f",
                     distance, arrived ? "AT_HOME" : "AWAY", onTheSpot,
                     citizen.blockPosition().getY() - citizen.getReturnPoint().getY(),
@@ -231,8 +241,10 @@ public final class CTestCommand {
             source.sendSuccess(() -> Component.literal(line), false);
         }
 
-        String summary = String.format("SUMMARY total=%d at_home=%d exact=%d away=%d unset=%d placed=%d tolerance=%.1f",
-                citizens.size(), home, exact, away, unset, placed, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
+        String summary = String.format("SUMMARY total=%d arrived=%d gave_up=%d at_home=%d exact=%d "
+                        + "away=%d unset=%d placed=%d tolerance=%.1f",
+                citizens.size(), made, failed, home, exact, away, unset, placed,
+                CitizenEntity.RETURN_ARRIVAL_DISTANCE);
         source.sendSuccess(() -> Component.literal(summary), false);
         return home;
     }

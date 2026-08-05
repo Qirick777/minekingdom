@@ -312,9 +312,18 @@ public class CitizenTravel {
             return Status.MOVING;
         }
 
+        // Pathfinding first, even for a single block. Steering alone walks a citizen into
+        // whatever is in the way and keeps pushing: two citizens that ended up in the same
+        // square shoved each other in place for three minutes, timing out the same first leg
+        // thirty times over with a twenty-two leg plan in hand. Steering is still there for
+        // the legs pathfinding will not take, which is every leg through ground not yet cut.
         BlockPos stand = step.stand();
-        this.citizen.getMoveControl().setWantedPosition(stand.getX() + 0.5D, stand.getY(),
-                stand.getZ() + 0.5D, this.speedModifier);
+        if (this.citizen.getNavigation().isDone()
+                && !this.citizen.getNavigation().moveTo(stand.getX() + 0.5D, stand.getY(),
+                        stand.getZ() + 0.5D, this.speedModifier)) {
+            this.citizen.getMoveControl().setWantedPosition(stand.getX() + 0.5D, stand.getY(),
+                    stand.getZ() + 0.5D, this.speedModifier);
+        }
         this.report(CitizenJourney.Mode.PLAN_MOVE);
         return Status.MOVING;
     }

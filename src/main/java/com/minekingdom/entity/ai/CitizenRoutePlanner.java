@@ -139,7 +139,7 @@ public final class CitizenRoutePlanner {
 
         Node best = null;
         Node closest = null;
-        double closestDistance = Double.MAX_VALUE;
+        double closestScore = Double.MAX_VALUE;
         int expanded = 0;
         while (!queue.isEmpty() && expanded < nodeLimit) {
             Node current = queue.poll();
@@ -157,10 +157,19 @@ public final class CitizenRoutePlanner {
             // a step that stacks a block or clears one makes its own footing. Judging this
             // against the untouched world ruled out every climb, so a citizen with a long
             // way to go never got a plan that stacked or cut anything, however boxed in.
-            double toGoal = current.pos.distSqr(goal);
-            if (toGoal < closestDistance && current.footing) {
-                closestDistance = toGoal;
-                closest = current;
+            //
+            // Where the citizen already is never counts. Scored on straight-line distance it
+            // beats every first move away from the goal, so anyone who has to climb down or
+            // double back before making ground was handed an empty plan for ever: one on a
+            // pinnacle with a drop on all four sides never took a single step in ten minutes.
+            // Scoring on the cost of getting there plus the distance left keeps the ordinary
+            // case picking a stop that makes ground, while leaving a way out of a dead end.
+            if (current.parent != null && current.footing) {
+                double score = current.cost + MOVE_COST * Math.sqrt(current.pos.distSqr(goal));
+                if (score < closestScore) {
+                    closestScore = score;
+                    closest = current;
+                }
             }
 
             for (Edge edge : edges(level, current.pos, horizontal, vertical, from, canBuild, own)) {
