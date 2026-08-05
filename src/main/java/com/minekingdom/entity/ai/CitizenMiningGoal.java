@@ -53,6 +53,11 @@ public class CitizenMiningGoal extends Goal {
     private static final int SAFETY_HORIZONTAL = 8;
     private static final int SAFETY_VERTICAL = 5;
     private static final int SAFETY_NODE_LIMIT = 512;
+    /** Coarse sweep used only when nothing is within the fine search, sampled to keep it cheap. */
+    private static final int PROSPECT_HORIZONTAL = 24;
+    private static final int PROSPECT_VERTICAL = 8;
+    private static final int PROSPECT_STEP = 4;
+    private static final int PROSPECT_TIMEOUT = 400;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -64,14 +69,18 @@ public class CitizenMiningGoal extends Goal {
     /** Skipped once on the next search so an unreachable block cannot be re-picked forever. */
     @Nullable
     private BlockPos skipTarget;
-    private float destroyProgress;
-    private int lastBreakStage = -1;
+    /** Somewhere worth walking to when the citizen has run the neighbourhood dry. */
+    @Nullable
+    private BlockPos prospectTarget;
+    private int prospectTicks;
+    private final CitizenBlockBreaker breaker;
     private int rescanCooldown;
     private int approachTicks;
 
     public CitizenMiningGoal(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
         this.speedModifier = speedModifier;
+        this.breaker = new CitizenBlockBreaker(citizen);
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
     }
 
@@ -92,12 +101,23 @@ public class CitizenMiningGoal extends Goal {
             this.rescanCooldown--;
             return false;
         }
-        return this.findTarget();
+        if (this.findTarget()) {
+            return true;
+        }
+        // Nothing here: rather than stand around, go and find some.
+        this.prospectTarget = this.findProspectDestination();
+        return this.prospectTarget != null;
     }
 
     @Override
     public boolean canContinueToUse() {
-        return this.citizen.isMining() && this.targetBlock != null && this.isStillValid(this.targetBlock);
+        if (!this.citizen.isMining()) {
+            return false;
+        }
+        if (this.targetBlock != null) {
+            return this.isStillValid(this.targetBlock);
+        }
+        return this.prospectTarget != null;
     }
 
     @Override
@@ -108,14 +128,18 @@ public class CitizenMiningGoal extends Goal {
     @Override
     public void start() {
         this.approachTicks = 0;
-        this.moveToStandSpot();
+        this.prospectTicks = 0;
+        if (this.targetBlock != null) {
+            this.moveToStandSpot();
+        }
     }
 
     @Override
     public void stop() {
-        this.clearBreakProgress();
+        this.breaker.reset();
         this.targetBlock = null;
         this.standSpot = null;
+        this.prospectTarget = null;
         this.citizen.getNavigation().stop();
         this.rescanCooldown = RESCAN_INTERVAL;
     }
@@ -124,6 +148,7 @@ public class CitizenMiningGoal extends Goal {
     public void tick() {
         BlockPos target = this.targetBlock;
         if (target == null) {
+            this.prospectTick();
             return;
         }
 
@@ -162,46 +187,23 @@ public class CitizenMiningGoal extends Goal {
 
     private void abandonTarget() {
         this.skipTarget = this.targetBlock;
-        this.clearBreakProgress();
+        this.breaker.reset();
         this.targetBlock = null;
         this.standSpot = null;
     }
 
     private void mineTick(BlockPos target) {
-        Level level = this.citizen.level();
-        BlockState state = level.getBlockState(target);
-
-        this.citizen.swing(InteractionHand.MAIN_HAND);
-        this.destroyProgress += this.citizen.getDestroyProgressPerTick(state, target);
-
-        int stage = Mth.clamp((int) (this.destroyProgress * 10.0F), 0, 9);
-        if (stage != this.lastBreakStage) {
-            level.destroyBlockProgress(this.citizen.getId(), target, stage);
-            this.lastBreakStage = stage;
+        if (!this.breaker.advance(target)) {
+            return;
         }
-
-        if (this.destroyProgress >= 1.0F) {
-            this.clearBreakProgress();
-            if (level.destroyBlock(target, true, this.citizen, 512)) {
-                this.citizen.recordMinedBlock();
-            }
-            this.targetBlock = null;
-            this.standSpot = null;
-            this.skipTarget = null;
-            // Line up the next block straight away. Ending the goal here instead left the
-            // citizen standing idle through the rescan delay after every single block.
-            if (this.findTarget()) {
-                this.approachTicks = 0;
-            }
+        this.targetBlock = null;
+        this.standSpot = null;
+        this.skipTarget = null;
+        // Line up the next block straight away. Ending the goal here instead left the
+        // citizen standing idle through the rescan delay after every single block.
+        if (this.findTarget()) {
+            this.approachTicks = 0;
         }
-    }
-
-    private void clearBreakProgress() {
-        if (this.lastBreakStage != -1 && this.targetBlock != null) {
-            this.citizen.level().destroyBlockProgress(this.citizen.getId(), this.targetBlock, -1);
-        }
-        this.lastBreakStage = -1;
-        this.destroyProgress = 0.0F;
     }
 
     private boolean withinReach(@Nullable BlockPos pos) {
@@ -295,12 +297,27 @@ public class CitizenMiningGoal extends Goal {
     }
 
     private boolean isMineableTarget(BlockPos pos) {
-        Level level = this.citizen.level();
+        return isBreakableSafely(this.citizen.level(), pos) && !this.isOwnFooting(pos);
+    }
+
+    /** Breakable stone or ore that will not flood the place or drop sand on whoever mines it. */
+    public static boolean isBreakableSafely(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (!isMineable(state) || state.getDestroySpeed(level, pos) < 0.0F) {
             return false;
         }
-        return !this.isOwnFooting(pos) && !this.wouldExposeLiquid(pos) && !this.wouldDropFallingBlock(pos);
+        if (level.getBlockState(pos.above()).getBlock() instanceof FallingBlock) {
+            return false;
+        }
+        if (!level.getFluidState(pos).isEmpty()) {
+            return false;
+        }
+        for (Direction direction : Direction.values()) {
+            if (!level.getFluidState(pos.relative(direction)).isEmpty()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean isExposed(BlockPos pos) {
@@ -323,22 +340,7 @@ public class CitizenMiningGoal extends Goal {
                 && pos.getZ() >= Mth.floor(box.minZ) && pos.getZ() <= Mth.floor(box.maxZ - 1.0E-7D);
     }
 
-    private boolean wouldExposeLiquid(BlockPos pos) {
-        Level level = this.citizen.level();
-        if (!level.getFluidState(pos).isEmpty()) {
-            return true;
-        }
-        for (Direction direction : Direction.values()) {
-            if (!level.getFluidState(pos.relative(direction)).isEmpty()) {
-                return true;
-            }
-        }
-        return false;
-    }
 
-    private boolean wouldDropFallingBlock(BlockPos pos) {
-        return this.citizen.level().getBlockState(pos.above()).getBlock() instanceof FallingBlock;
-    }
 
     /**
      * Standing positions beside the block: level with it, one below so it sits at head
@@ -362,6 +364,71 @@ public class CitizenMiningGoal extends Goal {
                 if (distance < bestDistance) {
                     bestDistance = distance;
                     best = spot;
+                }
+            }
+        }
+
+        // Standing directly underneath, so the block sits just above the citizen's head.
+        // Without this a citizen under a ceiling has nothing it is allowed to mine and
+        // cannot dig its way up.
+        BlockPos below = target.below(2);
+        if (reachable.contains(below) && below.distSqr(origin) < bestDistance) {
+            best = below;
+        }
+        return best;
+    }
+
+    // ---------------------------------------------------------------- prospecting
+
+    /** Walks towards distant stone, checking for real work to do along the way. */
+    private void prospectTick() {
+        BlockPos destination = this.prospectTarget;
+        if (destination == null) {
+            return;
+        }
+        if (++this.prospectTicks > PROSPECT_TIMEOUT) {
+            this.prospectTarget = null;
+            return;
+        }
+        if (this.prospectTicks % RESCAN_INTERVAL == 0 && this.findTarget()) {
+            this.prospectTarget = null;
+            this.approachTicks = 0;
+            this.moveToStandSpot();
+            return;
+        }
+        if (this.citizen.getNavigation().isDone()
+                && !this.citizen.getNavigation().moveTo(destination.getX() + 0.5D, destination.getY(),
+                        destination.getZ() + 0.5D, this.speedModifier)) {
+            this.prospectTarget = null;
+        }
+    }
+
+    /**
+     * A sampled sweep well beyond the fine search. It only has to be good enough to pick a
+     * direction; once the citizen gets there the ordinary search takes over.
+     */
+    @Nullable
+    private BlockPos findProspectDestination() {
+        Level level = this.citizen.level();
+        BlockPos origin = this.citizen.blockPosition();
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        double alreadySearched = (double) SEARCH_HORIZONTAL * SEARCH_HORIZONTAL;
+
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (int dx = -PROSPECT_HORIZONTAL; dx <= PROSPECT_HORIZONTAL; dx += PROSPECT_STEP) {
+            for (int dy = -PROSPECT_VERTICAL; dy <= PROSPECT_VERTICAL; dy += PROSPECT_STEP) {
+                for (int dz = -PROSPECT_HORIZONTAL; dz <= PROSPECT_HORIZONTAL; dz += PROSPECT_STEP) {
+                    cursor.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
+                    double distance = cursor.distSqr(origin);
+                    if (distance <= alreadySearched || distance >= bestDistance) {
+                        continue;
+                    }
+                    if (!isBreakableSafely(level, cursor) || !this.isExposed(cursor)) {
+                        continue;
+                    }
+                    best = cursor.immutable();
+                    bestDistance = distance;
                 }
             }
         }

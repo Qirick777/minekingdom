@@ -99,19 +99,24 @@ public final class CTestCommand {
 
         int total = 0;
         int idle = 0;
+        int stuck = 0;
         for (CitizenEntity citizen : citizens) {
             int mined = citizen.getMinedBlocks();
             total += mined;
             if (mined == 0) {
                 idle++;
             }
-            String line = String.format("mined=%d task=%s pos=%.1f,%.1f,%.1f",
-                    mined, citizen.getTask().getSerializedName(), citizen.getX(), citizen.getY(), citizen.getZ());
+            if (citizen.isStuck()) {
+                stuck++;
+            }
+            String line = String.format("mined=%d task=%s stuck=%b pos=%.1f,%.1f,%.1f",
+                    mined, citizen.getTask().getSerializedName(), citizen.isStuck(),
+                    citizen.getX(), citizen.getY(), citizen.getZ());
             source.sendSuccess(() -> Component.literal(line), false);
         }
 
-        String summary = String.format("MINED_SUMMARY total=%d citizens=%d mined_none=%d",
-                total, citizens.size(), idle);
+        String summary = String.format("MINED_SUMMARY total=%d citizens=%d mined_none=%d stuck=%d",
+                total, citizens.size(), idle, stuck);
         source.sendSuccess(() -> Component.literal(summary), false);
         return total;
     }
@@ -196,6 +201,7 @@ public final class CTestCommand {
         }
         for (CitizenEntity citizen : citizens) {
             String line = "task=" + citizen.getTask().getSerializedName()
+                    + " stuck=" + citizen.isStuck()
                     + " goals=[" + citizen.describeRunningGoals() + "]";
             source.sendSuccess(() -> Component.literal(line), false);
         }

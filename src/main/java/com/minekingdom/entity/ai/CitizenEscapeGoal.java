@@ -38,6 +38,7 @@ public class CitizenEscapeGoal extends Goal {
     private static final int JUMP_TIMEOUT = 20;
 
     private final CitizenEntity citizen;
+    private final CitizenBlockBreaker breaker;
 
     @Nullable
     private BlockPos lastPos;
@@ -49,6 +50,7 @@ public class CitizenEscapeGoal extends Goal {
 
     public CitizenEscapeGoal(CitizenEntity citizen) {
         this.citizen = citizen;
+        this.breaker = new CitizenBlockBreaker(citizen);
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.JUMP));
     }
 
@@ -69,12 +71,23 @@ public class CitizenEscapeGoal extends Goal {
             return false;
         }
 
-        return this.canBuild() && this.hasHeadroom() && this.isBoxedIn();
+        if (!this.isBoxedIn()) {
+            this.citizen.setStuck(false);
+            return false;
+        }
+
+        // Either build upwards, or open the ceiling that is stopping the climb.
+        boolean canAct = this.hasHeadroom() ? this.canBuild() : this.ceilingIsBreakable();
+        this.citizen.setStuck(!canAct);
+        return canAct;
     }
 
     @Override
     public boolean canContinueToUse() {
-        return this.placed < MAX_PILLAR && this.citizen.getTask() != CitizenTask.IDLE && this.canBuild();
+        if (this.placed >= MAX_PILLAR || this.citizen.getTask() == CitizenTask.IDLE) {
+            return false;
+        }
+        return this.hasHeadroom() ? this.canBuild() : this.ceilingIsBreakable();
     }
 
     @Override
@@ -92,6 +105,7 @@ public class CitizenEscapeGoal extends Goal {
 
     @Override
     public void stop() {
+        this.breaker.reset();
         this.jumpFrom = null;
         this.stillChecks = 0;
         this.lastPos = null;
@@ -99,6 +113,15 @@ public class CitizenEscapeGoal extends Goal {
 
     @Override
     public void tick() {
+        // A blocked ceiling has to come down before there is anywhere to climb to.
+        if (!this.hasHeadroom()) {
+            this.jumpFrom = null;
+            BlockPos ceiling = this.citizen.blockPosition().above(2);
+            this.citizen.getLookControl().setLookAt(ceiling.getX() + 0.5D, ceiling.getY() + 0.5D, ceiling.getZ() + 0.5D);
+            this.breaker.advance(ceiling);
+            return;
+        }
+
         if (this.jumpFrom == null) {
             if (this.citizen.onGround()) {
                 this.jumpFrom = this.citizen.blockPosition();
@@ -140,6 +163,7 @@ public class CitizenEscapeGoal extends Goal {
 
         // Once there is a way up again there is no reason to keep building.
         if (!this.isBoxedIn()) {
+            this.citizen.setStuck(false);
             this.placed = MAX_PILLAR;
         }
     }
@@ -161,6 +185,12 @@ public class CitizenEscapeGoal extends Goal {
             }
         }
         return -1;
+    }
+
+    /** The block right above the citizen's head, when it is one a citizen may take out. */
+    private boolean ceilingIsBreakable() {
+        BlockPos ceiling = this.citizen.blockPosition().above(2);
+        return CitizenMiningGoal.isBreakableSafely(this.citizen.level(), ceiling);
     }
 
     private boolean hasHeadroom() {

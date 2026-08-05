@@ -79,6 +79,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     @Nullable
     private BlockPos returnPoint;
     private int minedBlocks;
+    private boolean stuck;
     /** Recently occupied standing positions, oldest first, used as proven-good ground to keep reachable. */
     private final Deque<BlockPos> breadcrumbs = new ArrayDeque<>();
     private int remainingPersistentAngerTime;
@@ -242,6 +243,19 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
                     this.getStringUUID(), this.returnPoint, ticks,
                     String.format("%.2f", this.distanceToReturnPoint()), String.format("%.2f", startDistance));
         }
+    }
+
+    /** Walled in with no way to dig or build out. Reported rather than left to look like idling. */
+    public boolean isStuck() {
+        return this.stuck;
+    }
+
+    public void setStuck(boolean stuck) {
+        if (stuck && !this.stuck) {
+            MineKingdom.LOGGER.info("Citizen {} is stuck at {} with no way to dig or build out",
+                    this.getStringUUID(), this.blockPosition());
+        }
+        this.stuck = stuck;
     }
 
     /** Which AI goals currently hold this citizen, for {@code /ctest debug}. */
