@@ -36,6 +36,8 @@ public class CitizenEscapeGoal extends Goal {
     private static final int CONFINED_NODES = 24;
     private static final int MAX_PILLAR = 8;
     private static final int JUMP_TIMEOUT = 20;
+    /** How far around itself a citizen looks for something it could still dig through. */
+    private static final int DIGGABLE_RADIUS = 2;
 
     private final CitizenEntity citizen;
     private final CitizenBlockBreaker breaker;
@@ -43,6 +45,7 @@ public class CitizenEscapeGoal extends Goal {
     @Nullable
     private BlockPos lastPos;
     private int stillChecks;
+    private int lastMined = -1;
     private int placed;
     @Nullable
     private BlockPos jumpFrom;
@@ -61,10 +64,15 @@ public class CitizenEscapeGoal extends Goal {
             return false;
         }
 
+        // A citizen chipping away at a seam barely moves, but it is working, not stuck.
+        int mined = this.citizen.getMinedBlocks();
         BlockPos pos = this.citizen.blockPosition();
-        if (this.lastPos == null || this.lastPos.distSqr(pos) > STUCK_RADIUS * STUCK_RADIUS) {
+        if (this.lastPos == null || mined != this.lastMined
+                || this.lastPos.distSqr(pos) > STUCK_RADIUS * STUCK_RADIUS) {
             this.lastPos = pos;
+            this.lastMined = mined;
             this.stillChecks = 0;
+            this.citizen.setStuck(false);
             return false;
         }
         if (++this.stillChecks < STUCK_CHECKS) {
@@ -75,11 +83,38 @@ public class CitizenEscapeGoal extends Goal {
             this.citizen.setStuck(false);
             return false;
         }
+        // Being in a small space is not the same as being trapped: if there is still stone
+        // to break, the mining goal gets it out, and pillaring would only waste blocks.
+        if (this.hasSomethingToDig()) {
+            this.citizen.setStuck(false);
+            return false;
+        }
 
         // Either build upwards, or open the ceiling that is stopping the climb.
         boolean canAct = this.hasHeadroom() ? this.canBuild() : this.ceilingIsBreakable();
         this.citizen.setStuck(!canAct);
         return canAct;
+    }
+
+    /** Any block close by that the citizen is allowed to break its way through. */
+    private boolean hasSomethingToDig() {
+        Level level = this.citizen.level();
+        BlockPos feet = this.citizen.blockPosition();
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (int dx = -DIGGABLE_RADIUS; dx <= DIGGABLE_RADIUS; dx++) {
+            for (int dy = -DIGGABLE_RADIUS; dy <= DIGGABLE_RADIUS; dy++) {
+                for (int dz = -DIGGABLE_RADIUS; dz <= DIGGABLE_RADIUS; dz++) {
+                    cursor.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
+                    if (dy < 0 && dx == 0 && dz == 0) {
+                        continue;   // its own footing is off limits anyway
+                    }
+                    if (CitizenMiningGoal.isBreakableSafely(level, cursor)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     @Override
