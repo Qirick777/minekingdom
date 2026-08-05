@@ -223,6 +223,7 @@ public class CitizenMiningGoal extends Goal {
         BlockPos origin = this.citizen.blockPosition();
         Set<BlockPos> reachable = ReversibleWalk.reachable(this.citizen.level(), origin,
                 SEARCH_HORIZONTAL + 1, SEARCH_VERTICAL + 1, WALK_NODE_LIMIT, null);
+        this.citizen.getPathMemory().compact(reachable);
         BlockPos skipped = this.skipTarget;
         this.skipTarget = null;
 
@@ -297,7 +298,9 @@ public class CitizenMiningGoal extends Goal {
     }
 
     private boolean isMineableTarget(BlockPos pos) {
-        return isBreakableSafely(this.citizen.level(), pos) && !this.isOwnFooting(pos);
+        return isBreakableSafely(this.citizen.level(), pos)
+                && !this.isOwnFooting(pos)
+                && !this.citizen.getPathMemory().isFloorOfRoute(pos);
     }
 
     /** Breakable stone or ore that will not flood the place or drop sand on whoever mines it. */
@@ -463,20 +466,10 @@ public class CitizenMiningGoal extends Goal {
      */
     @Nullable
     private BlockPos findAnchor(BlockPos spot, BlockPos target) {
-        Level level = this.citizen.level();
-        for (BlockPos crumb : this.citizen.getBreadcrumbs()) {
-            if (crumb.equals(spot)) {
-                continue;
-            }
-            if (Math.abs(crumb.getX() - spot.getX()) > SAFETY_HORIZONTAL
-                    || Math.abs(crumb.getZ() - spot.getZ()) > SAFETY_HORIZONTAL
-                    || Math.abs(crumb.getY() - spot.getY()) > SAFETY_VERTICAL) {
-                continue;
-            }
-            if (ReversibleWalk.canStandAt(level, crumb, target)) {
-                return crumb;
-            }
+        BlockPos anchor = this.citizen.getPathMemory().oldestWithin(spot, SAFETY_HORIZONTAL, SAFETY_VERTICAL);
+        if (anchor == null || !ReversibleWalk.canStandAt(this.citizen.level(), anchor, target)) {
+            return null;
         }
-        return null;
+        return anchor;
     }
 }

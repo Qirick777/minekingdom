@@ -3,6 +3,7 @@ package com.minekingdom.entity;
 import com.minekingdom.MineKingdom;
 import com.minekingdom.entity.ai.CitizenEscapeGoal;
 import com.minekingdom.entity.ai.CitizenMiningGoal;
+import com.minekingdom.entity.ai.CitizenPathMemory;
 import com.minekingdom.entity.ai.CitizenReturnGoal;
 import com.minekingdom.entity.task.CitizenTask;
 import net.minecraft.core.BlockPos;
@@ -48,8 +49,6 @@ import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -69,7 +68,6 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
             SynchedEntityData.defineId(CitizenEntity.class, EntityDataSerializers.BOOLEAN);
     private static final UniformInt PERSISTENT_ANGER_TIME = TimeUtil.rangeOfSeconds(20, 39);
     private static final float BARE_HAND_DIG_SPEED = 1.0F;
-    private static final int BREADCRUMB_LIMIT = 24;
     /** How close a citizen has to get before a return counts as made. */
     public static final double RETURN_ARRIVAL_DISTANCE = 1.5D;
 
@@ -80,8 +78,8 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private BlockPos returnPoint;
     private int minedBlocks;
     private boolean stuck;
-    /** Recently occupied standing positions, oldest first, used as proven-good ground to keep reachable. */
-    private final Deque<BlockPos> breadcrumbs = new ArrayDeque<>();
+    /** The ground this citizen has walked over, kept walkable whatever it is working on. */
+    private final CitizenPathMemory pathMemory = new CitizenPathMemory();
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -131,24 +129,12 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         if (this.level() instanceof ServerLevel serverLevel) {
             this.updatePersistentAnger(serverLevel, true);
         }
-        this.recordBreadcrumb();
+        this.pathMemory.record(this.blockPosition());
         super.customServerAiStep();
     }
 
-    private void recordBreadcrumb() {
-        BlockPos pos = this.blockPosition();
-        if (pos.equals(this.breadcrumbs.peekLast())) {
-            return;
-        }
-        this.breadcrumbs.addLast(pos);
-        while (this.breadcrumbs.size() > BREADCRUMB_LIMIT) {
-            this.breadcrumbs.removeFirst();
-        }
-    }
-
-    /** Where this citizen has recently stood, oldest first. */
-    public Iterable<BlockPos> getBreadcrumbs() {
-        return this.breadcrumbs;
+    public CitizenPathMemory getPathMemory() {
+        return this.pathMemory;
     }
 
     @Override
@@ -186,6 +172,10 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
      * jobs, workplace blocks or anything else can drive citizens the same way.
      */
     public void setTask(CitizenTask task) {
+        if (task != this.task) {
+            // The way here was remembered for the last errand; the next one starts afresh.
+            this.pathMemory.clear();
+        }
         this.task = task;
     }
 
@@ -214,6 +204,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     /** Records where this citizen should be able to walk back to. */
     public void setReturnPoint(@Nullable BlockPos pos) {
         this.returnPoint = pos == null ? null : pos.immutable();
+        this.pathMemory.clear();
     }
 
     public boolean isAtReturnPoint() {

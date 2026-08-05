@@ -4,36 +4,32 @@ import com.minekingdom.entity.CitizenEntity;
 import com.minekingdom.entity.task.CitizenTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.ai.goal.Goal;
-import net.minecraft.world.phys.Vec3;
 
 import java.util.EnumSet;
 
 /**
  * Walks a citizen back to its recorded return point.
  *
- * <p>The citizen only ever pathfinds; it is never moved or teleported directly, so
- * reaching the return point proves it could actually walk the route back. The path
- * is reissued periodically because a single request only reaches as far as the
- * citizen's follow range, and a long way home is covered a leg at a time.
+ * <p>The citizen makes its own way there and is never moved or teleported, so arriving
+ * proves it could actually get back. Travelling is left to {@link CitizenTravel}, which
+ * walks where it can and digs or builds where it cannot; a citizen that has mined its way
+ * down into a pit has to cut a way back up, and simply asking for a path would never
+ * manage it.
  */
 public class CitizenReturnGoal extends Goal {
-    private static final int REPATH_INTERVAL = 20;
-    private static final int GIVE_UP_TICKS = 2400;
-    /** Within this range the citizen walks straight at the point instead of pathfinding to it. */
-    private static final double CLOSE_RANGE = 4.0D;
+    private static final int GIVE_UP_TICKS = 3600;
 
     private final CitizenEntity citizen;
-    private final double speedModifier;
+    private final CitizenTravel travel;
     private int elapsed;
-    private int repathCooldown;
     private double startDistance;
     /** Arrival is reported once per trip, even though the goal may tick again before it is stopped. */
     private boolean reported;
 
     public CitizenReturnGoal(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
-        this.speedModifier = speedModifier;
-        this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
+        this.travel = new CitizenTravel(citizen, speedModifier);
+        this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK, Flag.JUMP));
     }
 
     @Override
@@ -43,7 +39,7 @@ public class CitizenReturnGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
-        return this.canUse();
+        return this.canUse() && !this.reported;
     }
 
     @Override
@@ -54,49 +50,42 @@ public class CitizenReturnGoal extends Goal {
     @Override
     public void start() {
         this.elapsed = 0;
-        this.repathCooldown = 0;
         this.reported = false;
         this.startDistance = this.citizen.distanceToReturnPoint();
+        BlockPos home = this.citizen.getReturnPoint();
+        if (home != null) {
+            this.travel.setDestination(home, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
+        }
     }
 
     @Override
     public void stop() {
-        this.citizen.getNavigation().stop();
+        this.travel.stop();
     }
 
     @Override
     public void tick() {
-        BlockPos home = this.citizen.getReturnPoint();
-        if (home == null || this.reported) {
+        if (this.reported || this.citizen.getReturnPoint() == null) {
             return;
         }
 
         if (this.citizen.isAtReturnPoint()) {
-            this.reported = true;
-            this.citizen.getNavigation().stop();
-            this.citizen.finishReturn(true, this.elapsed, this.startDistance);
+            this.finish(true);
             return;
         }
-
         if (++this.elapsed > GIVE_UP_TICKS) {
-            this.reported = true;
-            this.citizen.finishReturn(false, this.elapsed, this.startDistance);
+            this.finish(false);
             return;
         }
 
-        Vec3 center = Vec3.atCenterOf(home);
-        this.citizen.getLookControl().setLookAt(center.x, center.y, center.z);
-
-        // Pathfinding treats an adjacent block as arrival and stops, leaving the citizen a
-        // block short of the spot it set out from. Close that last stretch by steering directly.
-        if (this.citizen.distanceToReturnPoint() < CLOSE_RANGE) {
-            this.citizen.getMoveControl().setWantedPosition(center.x, home.getY(), center.z, this.speedModifier);
-            return;
+        if (this.travel.tick() == CitizenTravel.Status.ARRIVED) {
+            this.finish(true);
         }
+    }
 
-        if (--this.repathCooldown <= 0) {
-            this.repathCooldown = REPATH_INTERVAL;
-            this.citizen.getNavigation().moveTo(center.x, home.getY(), center.z, this.speedModifier);
-        }
+    private void finish(boolean arrived) {
+        this.reported = true;
+        this.travel.stop();
+        this.citizen.finishReturn(arrived, this.elapsed, this.startDistance);
     }
 }
