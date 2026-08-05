@@ -108,6 +108,8 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
      * citizen that pillars up is left on top of its own work with no legal way off.
      */
     private final Set<BlockPos> ownBlocks = new LinkedHashSet<>();
+    /** Game time until which ordinary walking is not to be trusted for this citizen. */
+    private long walkBanUntil;
     private int remainingPersistentAngerTime;
     @Nullable
     private UUID persistentAngerTarget;
@@ -183,6 +185,21 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
 
     public void forgetOwnBlock(BlockPos pos) {
         this.ownBlocks.remove(pos);
+    }
+
+    /**
+     * Records that ordinary walking has been tried here and got the citizen nowhere.
+     *
+     * <p>Kept on the citizen rather than on whatever is driving it at the time. Goals hand a
+     * citizen back and forth, and a verdict that starts over on every handover never lasts
+     * long enough to be acted on, which leaves the citizen shuffling on the spot.
+     */
+    public void banWalking(int ticks) {
+        this.walkBanUntil = this.level().getGameTime() + ticks;
+    }
+
+    public boolean isWalkingBanned() {
+        return this.level().getGameTime() < this.walkBanUntil;
     }
 
     @Override

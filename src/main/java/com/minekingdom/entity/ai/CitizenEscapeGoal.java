@@ -33,6 +33,8 @@ public class CitizenEscapeGoal extends Goal {
     /** How far around itself a citizen looks for something it could still dig through. */
     private static final int DIGGABLE_RADIUS = 2;
     private static final int GIVE_UP_TICKS = 600;
+    /** How long a citizen that got nowhere is left alone before another attempt. */
+    private static final int RETRY_DELAY = 200;
 
     private final CitizenEntity citizen;
     private final CitizenTravel travel;
@@ -42,6 +44,8 @@ public class CitizenEscapeGoal extends Goal {
     private int stillChecks;
     private int lastMined = -1;
     private int elapsed;
+    /** Keeps a hopeless attempt from being retried every tick with a fresh route search. */
+    private long retryAfter;
 
     public CitizenEscapeGoal(CitizenEntity citizen, double speedModifier) {
         this.citizen = citizen;
@@ -51,6 +55,16 @@ public class CitizenEscapeGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (this.citizen.level().getGameTime() < this.retryAfter) {
+            return false;
+        }
+        // A citizen already known to be stuck gets help whatever it is doing, including
+        // nothing. An idle stuck citizen is one that gave up on getting somewhere, and
+        // every other goal ignores it, so left alone it stands where it failed for good.
+        if (this.citizen.isStuck()) {
+            this.stillChecks = 0;
+            return this.wayOut() != null;
+        }
         if (this.citizen.getTask() == CitizenTask.IDLE) {
             this.stillChecks = 0;
             return false;
@@ -89,7 +103,8 @@ public class CitizenEscapeGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
-        return this.citizen.getTask() != CitizenTask.IDLE && this.elapsed < GIVE_UP_TICKS;
+        return (this.citizen.isStuck() || this.citizen.getTask() != CitizenTask.IDLE)
+                && this.elapsed < GIVE_UP_TICKS;
     }
 
     @Override
@@ -121,8 +136,11 @@ public class CitizenEscapeGoal extends Goal {
             this.citizen.setStuck(false);
             this.elapsed = GIVE_UP_TICKS;
         } else if (status == CitizenTravel.Status.STUCK) {
-            // Nothing can be done from here; say so and let other goals have a turn.
+            // Nothing can be done from here; say so and let other goals have a turn. The
+            // wait before another attempt is what stops this becoming a route search every
+            // tick for a citizen that has nowhere to go.
             this.citizen.setStuck(true);
+            this.retryAfter = this.citizen.level().getGameTime() + RETRY_DELAY;
             this.elapsed = GIVE_UP_TICKS;
         }
     }

@@ -232,9 +232,11 @@ public final class CTestCommand {
             BlockPos home = citizen.getReturnPoint();
             String route = home == null ? "home=unset"
                     : CitizenTravel.describeRoute(citizen, home, CitizenEntity.RETURN_ARRIVAL_DISTANCE);
+            BlockPos anchor = citizen.getPathMemory().oldestWithin(citizen.blockPosition(), 16, 10);
             String line = "task=" + citizen.getTask().getSerializedName()
                     + " stuck=" + citizen.isStuck()
                     + " at=" + citizen.blockPosition().toShortString()
+                    + " anchor=" + (anchor == null ? "none" : anchor.toShortString())
                     + " " + route
                     + " goals=[" + citizen.describeRunningGoals() + "]";
             source.sendSuccess(() -> Component.literal(line), false);

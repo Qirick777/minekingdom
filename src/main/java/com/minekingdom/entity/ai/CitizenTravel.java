@@ -52,6 +52,13 @@ public class CitizenTravel {
     private static final int WALK_STALL_TICKS = 60;
     /** How long walking stays out of favour once it has failed to deliver. */
     private static final int WALK_BAN_TICKS = 200;
+    /**
+     * How far a citizen has to get from where it last made headway for that to count as
+     * having gone somewhere. Measured as a distance rather than a change of block: a citizen
+     * shuffled back and forth across a block boundary by pathfinding looks busy every tick
+     * while covering no ground at all, and that is precisely the case worth catching.
+     */
+    private static final double PROGRESS_DISTANCE = 2.0D;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -70,12 +77,11 @@ public class CitizenTravel {
     private int replanCooldown;
 
     @Nullable
-    private BlockPos walkPos;
+    private Vec3 walkAnchor;
     private int walkStill;
-    private int walkBan;
 
     @Nullable
-    private BlockPos lastProgressPos;
+    private Vec3 progressAnchor;
     private int lastMined;
     private int lastPlaced;
     private int lastLeg;
@@ -97,11 +103,10 @@ public class CitizenTravel {
         this.dropPlan();
         this.breaker.reset();
         this.pillar.reset();
-        this.lastProgressPos = null;
+        this.progressAnchor = null;
         this.stallTicks = 0;
-        this.walkPos = null;
+        this.walkAnchor = null;
         this.walkStill = 0;
-        this.walkBan = 0;
     }
 
     public void stop() {
@@ -177,38 +182,41 @@ public class CitizenTravel {
 
         // Walking wins whenever it genuinely gets there. Checked on a cooldown because
         // working out a path is not free, and the answer does not change tick to tick.
-        if (this.walkBan > 0) {
-            this.walkBan--;
+        if (this.citizen.isWalkingBanned()) {
             this.walkable = false;
         } else if (--this.repathCooldown <= 0) {
             this.repathCooldown = REPATH_INTERVAL;
             Path path = this.citizen.getNavigation().createPath(target, 1);
-            this.walkable = path != null && path.canReach();
-            if (this.walkable) {
+            boolean reaches = path != null && path.canReach();
+            if (reaches) {
+                // Only a fresh turn to walking starts the clock again. Restarting it on
+                // every re-check let a citizen re-promise itself the same walk every twenty
+                // ticks, so the count of how long it had stood still never got anywhere.
+                if (!this.walkable) {
+                    this.walkAnchor = null;
+                    this.walkStill = 0;
+                }
                 this.dropPlan();
                 this.breaker.reset();
-                this.walkPos = null;
-                this.walkStill = 0;
                 this.citizen.getNavigation().moveTo(path, this.speedModifier);
             }
+            this.walkable = reaches;
         }
 
         if (this.walkable) {
-            BlockPos now = this.citizen.blockPosition();
-            if (now.equals(this.walkPos)) {
-                // Pathfinding said it could get there, and then the citizen did not move a
-                // muscle. Asking again gets the same answer for as long as the ground stays
-                // as it is, so walking is put aside and the dig plan gets its turn.
-                if (++this.walkStill > WALK_STALL_TICKS) {
-                    this.walkable = false;
-                    this.walkBan = WALK_BAN_TICKS;
-                    this.walkStill = 0;
-                    this.citizen.getNavigation().stop();
-                    return this.followPlan(target);
-                }
-            } else {
-                this.walkPos = now;
+            Vec3 now = this.citizen.position();
+            if (this.walkAnchor == null || now.distanceToSqr(this.walkAnchor) >= PROGRESS_DISTANCE * PROGRESS_DISTANCE) {
+                this.walkAnchor = now;
                 this.walkStill = 0;
+            } else if (++this.walkStill > WALK_STALL_TICKS) {
+                // Pathfinding said it could get there, and then the citizen covered no
+                // ground. Asking again gets the same answer for as long as the ground stays
+                // as it is, so walking is put aside and the dig plan gets its turn.
+                this.citizen.banWalking(WALK_BAN_TICKS);
+                this.walkable = false;
+                this.walkStill = 0;
+                this.citizen.getNavigation().stop();
+                return this.followPlan(target);
             }
             // Pathfinding calls an adjacent block close enough and stops, so steer the last bit.
             if (distance < CLOSE_RANGE) {
@@ -293,12 +301,13 @@ public class CitizenTravel {
      * for them, so this only fires on a citizen that is genuinely doing nothing.
      */
     private boolean stalled() {
-        BlockPos pos = this.citizen.blockPosition();
+        Vec3 pos = this.citizen.position();
         int mined = this.citizen.getMinedBlocks();
         int placed = this.pillar.placedCount();
-        if (this.lastProgressPos == null || !pos.equals(this.lastProgressPos)
-                || mined != this.lastMined || placed != this.lastPlaced || this.leg != this.lastLeg) {
-            this.lastProgressPos = pos;
+        boolean moved = this.progressAnchor == null
+                || pos.distanceToSqr(this.progressAnchor) >= PROGRESS_DISTANCE * PROGRESS_DISTANCE;
+        if (moved || mined != this.lastMined || placed != this.lastPlaced || this.leg != this.lastLeg) {
+            this.progressAnchor = pos;
             this.lastMined = mined;
             this.lastPlaced = placed;
             this.lastLeg = this.leg;
