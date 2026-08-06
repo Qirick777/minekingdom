@@ -57,13 +57,6 @@ public final class CTestCommand {
                                 .executes(CTestCommand::minedReport))
                         .then(Commands.literal("reset")
                                 .executes(CTestCommand::resetMined)))
-                // Experimental: the same work, but heading home now and then and whenever
-                // there is nowhere left to put anything.
-                .then(Commands.literal("mining2")
-                        .then(Commands.literal("start")
-                                .executes(context -> put(context, CitizenAssignment.MINING_WITH_RETURN)))
-                        .then(Commands.literal("stop")
-                                .executes(context -> put(context, CitizenAssignment.NONE))))
                 .then(Commands.literal("home")
                         .then(Commands.literal("set")
                                 .executes(CTestCommand::setHome))

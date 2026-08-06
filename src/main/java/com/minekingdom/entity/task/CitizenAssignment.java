@@ -12,10 +12,12 @@ import net.minecraft.util.StringRepresentable;
  */
 public enum CitizenAssignment implements StringRepresentable {
     NONE("none"),
-    /** Mine, and keep mining. */
-    MINING("mining"),
-    /** Mine, but head home every so often, and whenever there is nowhere left to put anything. */
-    MINING_WITH_RETURN("mining_with_return");
+    /**
+     * Mine, heading back to the return point every so often and whenever there is nowhere
+     * left to put anything. Mining without ever coming back was a separate job while the
+     * round trip was being proved out; it is the only mining there is now.
+     */
+    MINING("mining");
 
     private final String name;
 

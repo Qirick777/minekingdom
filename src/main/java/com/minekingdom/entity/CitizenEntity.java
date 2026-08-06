@@ -301,7 +301,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     }
 
     private void tickReturnUrge() {
-        if (this.assignment != CitizenAssignment.MINING_WITH_RETURN || this.task != CitizenTask.MINING) {
+        if (this.assignment != CitizenAssignment.MINING || this.task != CitizenTask.MINING) {
             return;
         }
         if (this.returnPoint == null) {
@@ -381,7 +381,7 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
         // going on saying: the flag is what lets the escape goal keep working on a citizen
         // no job would otherwise touch again.
         this.setStuck(!arrived);
-        if (this.assignment == CitizenAssignment.MINING_WITH_RETURN) {
+        if (this.assignment == CitizenAssignment.MINING) {
             // Back to work: a failed trip must not leave a citizen standing about.
             this.setTask(CitizenTask.MINING);
         } else {
