@@ -52,6 +52,8 @@ public class CitizenTravel {
     private static final int WALK_STALL_TICKS = 60;
     /** How long walking stays out of favour once it has failed to deliver. */
     private static final int WALK_BAN_TICKS = 200;
+    /** How long routes that climb by stacking stay out of favour once one proved impossible. */
+    private static final int BUILD_BAN_TICKS = 200;
     /**
      * How far a citizen has to get from where it last made headway for that to count as
      * having gone somewhere. Measured as a distance rather than a change of block: a citizen
@@ -59,6 +61,14 @@ public class CitizenTravel {
      * while covering no ground at all, and that is precisely the case worth catching.
      */
     private static final double PROGRESS_DISTANCE = 2.0D;
+    /**
+     * A second, slower watchdog that counts only ground covered and legs finished. Digging
+     * and stacking do not reset it, because a citizen that stacks a block and then digs the
+     * same block back out looks busy on those counters for ever while going nowhere -- a
+     * livelock the first watchdog cannot see, and one only reachable now that being stalled
+     * no longer stops the citizen working.
+     */
+    private static final int HARD_STALL_TICKS = 600;
 
     private final CitizenEntity citizen;
     private final double speedModifier;
@@ -89,6 +99,11 @@ public class CitizenTravel {
     private int lastLeg;
     private int stallTicks;
 
+    @Nullable
+    private Vec3 hardAnchor;
+    private int hardLeg;
+    private int hardTicks;
+
     public CitizenTravel(CitizenEntity citizen, double speedModifier, String driver) {
         this.citizen = citizen;
         this.speedModifier = speedModifier;
@@ -108,6 +123,9 @@ public class CitizenTravel {
         this.pillar.reset();
         this.progressAnchor = null;
         this.stallTicks = 0;
+        this.hardAnchor = null;
+        this.hardLeg = 0;
+        this.hardTicks = 0;
         this.walkAnchor = null;
         this.walkStill = 0;
         this.citizen.getJourney().begin(this.driver, this.destination);
@@ -140,7 +158,7 @@ public class CitizenTravel {
             target = live;
         }
         Path path = citizen.getNavigation().createPath(target, 1);
-        boolean canBuild = new CitizenPillarBuilder(citizen).canBuild();
+        boolean canBuild = new CitizenPillarBuilder(citizen).canBuild() && !citizen.isBuildingBanned();
         List<CitizenRoutePlanner.Step> plan = CitizenRoutePlanner.plan(citizen.level(), citizen.blockPosition(),
                 target, arrival, PLAN_HORIZONTAL, PLAN_VERTICAL, PLAN_NODE_LIMIT, canBuild,
                 citizen::placedOwnBlock);
@@ -175,20 +193,19 @@ public class CitizenTravel {
         }
         this.citizen.getLookControl().setLookAt(centre.x, centre.y, centre.z);
 
-        // Whether the citizen is getting anywhere is judged on what it has actually done,
-        // not on what this class reports. Saying MOVING while standing perfectly still is
-        // exactly how a citizen used to stare at its home for three minutes without ever
-        // being counted as stuck.
-        if (this.stalled()) {
-            this.report(CitizenJourney.Mode.STALLED);
-            return Status.STUCK;
-        }
+        // Counted every tick, acted on at the very end. Returning here the moment a citizen
+        // looks stalled is what made being stalled permanent: digging, stacking and finishing
+        // a leg are the only four things that clear it, and all four live below this point,
+        // so a citizen that tripped it could never do the one thing that would untrip it.
+        // Counting here and deciding later also keeps the count honest, since a tick spent
+        // mid-jump used to return early and never reach the counter at all.
+        boolean stalled = this.updateProgress();
 
         // A climb already under way is seen through before anything is re-examined.
         if (this.pillar.isMidJump()) {
             this.pillar.tick();
             this.report(CitizenJourney.Mode.BUILDING);
-            return Status.MOVING;
+            return this.verdict(Status.MOVING, stalled);
         }
 
         if (this.replanCooldown > 0) {
@@ -232,17 +249,29 @@ public class CitizenTravel {
                 this.walkable = false;
                 this.walkStill = 0;
                 this.citizen.getNavigation().stop();
-                return this.followPlan(target);
+                return this.verdict(this.followPlan(target), stalled);
             }
             // Pathfinding calls an adjacent block close enough and stops, so steer the last bit.
             if (distance < CLOSE_RANGE) {
                 this.citizen.getMoveControl().setWantedPosition(centre.x, target.getY(), centre.z, this.speedModifier);
             }
             this.report(CitizenJourney.Mode.WALKING);
-            return Status.MOVING;
+            return this.verdict(Status.MOVING, stalled);
         }
 
-        return this.followPlan(target);
+        return this.verdict(this.followPlan(target), stalled);
+    }
+
+    /**
+     * The work for this tick has been done; now say whether it got anywhere. Arriving is
+     * never overruled -- a citizen that reached its destination on the tick the watchdog
+     * came due has still arrived.
+     */
+    private Status verdict(Status status, boolean stalled) {
+        if (stalled && status != Status.ARRIVED) {
+            return Status.STUCK;
+        }
+        return status;
     }
 
     private Status followPlan(BlockPos target) {
@@ -255,7 +284,8 @@ public class CitizenTravel {
             }
             this.plan = CitizenRoutePlanner.plan(this.citizen.level(), this.citizen.blockPosition(), target,
                     this.arrivalDistance, PLAN_HORIZONTAL, PLAN_VERTICAL, PLAN_NODE_LIMIT,
-                    this.pillar.canBuild(), this.citizen::placedOwnBlock);
+                    this.pillar.canBuild() && !this.citizen.isBuildingBanned(),
+                    this.citizen::placedOwnBlock);
             this.leg = 0;
             this.legTicks = 0;
             this.citizen.getJourney().countPlan(this.plan.isEmpty());
@@ -299,10 +329,27 @@ public class CitizenTravel {
 
         if (step.buildUnderfoot()) {
             this.citizen.getNavigation().stop();
-            if (!this.pillar.tick()) {
-                this.dropPlan();
+            switch (this.pillar.tick()) {
+                case CLIMBING -> this.report(CitizenJourney.Mode.BUILDING);
+                case NEEDS_CLEAR -> {
+                    // Something overhead the citizen is allowed to break. The breaker this
+                    // class already uses for a plan's clear list does it, rather than the
+                    // builder growing one of its own and the two fighting over a block.
+                    BlockPos blocking = this.pillar.blocker();
+                    if (blocking != null && this.breaker.advance(blocking)) {
+                        this.citizen.forgetOwnBlock(blocking);
+                    }
+                    this.report(CitizenJourney.Mode.DIGGING);
+                }
+                case IMPOSSIBLE -> {
+                    // Saying so and dropping the plan alone gets the same plan straight back.
+                    // Ruling stacking out for a while makes the next search find a way that
+                    // digs or walks instead.
+                    this.citizen.banBuilding(BUILD_BAN_TICKS);
+                    this.dropPlan();
+                    this.report(CitizenJourney.Mode.BUILDING);
+                }
             }
-            this.report(CitizenJourney.Mode.BUILDING);
             return Status.MOVING;
         }
 
@@ -333,24 +380,39 @@ public class CitizenTravel {
      * Digging and climbing count as getting somewhere even though the citizen holds still
      * for them, so this only fires on a citizen that is genuinely doing nothing.
      */
-    private boolean stalled() {
+    private boolean updateProgress() {
         Vec3 pos = this.citizen.position();
         int mined = this.citizen.getMinedBlocks();
         int placed = this.pillar.placedCount();
         boolean moved = this.progressAnchor == null
                 || pos.distanceToSqr(this.progressAnchor) >= PROGRESS_DISTANCE * PROGRESS_DISTANCE;
+
         if (moved || mined != this.lastMined || placed != this.lastPlaced || this.leg != this.lastLeg) {
             this.progressAnchor = pos;
             this.lastMined = mined;
             this.lastPlaced = placed;
             this.lastLeg = this.leg;
             this.stallTicks = 0;
-            return false;
-        }
-        if (++this.stallTicks == STALL_TICKS + 1) {
+        } else if (++this.stallTicks == STALL_TICKS + 1) {
             this.citizen.getJourney().countStallTrip();
         }
-        return this.stallTicks > STALL_TICKS;
+
+        // The slower watchdog counts only ground covered and legs finished. A leg finishing
+        // is what separates honest work from going round in circles: a citizen that stacks a
+        // block and digs it straight back out never finishes one, however busy the digging
+        // and stacking counters look.
+        boolean hardMoved = this.hardAnchor == null
+                || pos.distanceToSqr(this.hardAnchor) >= PROGRESS_DISTANCE * PROGRESS_DISTANCE;
+        if (hardMoved || this.leg > this.hardLeg) {
+            this.hardAnchor = pos;
+            this.hardLeg = this.leg;
+            this.hardTicks = 0;
+        } else {
+            this.hardTicks++;
+        }
+
+        this.citizen.getJourney().setStalledFor(this.stallTicks, this.hardTicks);
+        return this.stallTicks > STALL_TICKS || this.hardTicks > HARD_STALL_TICKS;
     }
 
     /** Publishes what this tick amounted to, so a report can say it rather than guess it. */

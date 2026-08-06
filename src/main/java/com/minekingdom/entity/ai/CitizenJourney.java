@@ -41,6 +41,7 @@ public class CitizenJourney {
     private int legCount;
     private int legTicks;
     private int stallTicks;
+    private int hardStallTicks;
     private int walkStill;
     private int placed;
     @Nullable
@@ -84,6 +85,16 @@ public class CitizenJourney {
 
     public void released() {
         this.mode = Mode.NONE;
+    }
+
+    /**
+     * How long the citizen has been getting nowhere, kept beside what it is doing rather
+     * than replacing it. A citizen reported only as STALLED hides whether it was trying to
+     * dig, trying to climb, or doing nothing at all, which is the first thing worth knowing.
+     */
+    public void setStalledFor(int stallTicks, int hardStallTicks) {
+        this.stallTicks = stallTicks;
+        this.hardStallTicks = hardStallTicks;
     }
 
     public void countPlan(boolean empty) {
@@ -130,7 +141,7 @@ public class CitizenJourney {
                 + " age=" + (this.updatedAt == Long.MIN_VALUE ? "never" : String.valueOf(gameTime - this.updatedAt))
                 + " leg=" + this.leg + "/" + this.legCount
                 + " legTicks=" + this.legTicks
-                + " stall=" + this.stallTicks
+                + " stalledFor=" + this.stallTicks + "/" + this.hardStallTicks
                 + " walkStill=" + this.walkStill
                 + " placed=" + this.placed
                 + " dig=" + (this.digPos == null ? "none"

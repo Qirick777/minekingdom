@@ -112,6 +112,8 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
     private final Set<BlockPos> ownBlocks = new LinkedHashSet<>();
     /** Game time until which ordinary walking is not to be trusted for this citizen. */
     private long walkBanUntil;
+    /** Game time until which routes that climb by stacking are not worth planning. */
+    private long buildBanUntil;
     /** What this citizen is doing about getting somewhere, kept current as it does it. */
     private final CitizenJourney journey = new CitizenJourney();
     private int remainingPersistentAngerTime;
@@ -209,6 +211,22 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
 
     public boolean isWalkingBanned() {
         return this.level().getGameTime() < this.walkBanUntil;
+    }
+
+    /**
+     * Records that climbing by stacking has been tried here and cannot work.
+     *
+     * <p>Kept as a spell rather than as a list of forbidden places. A route search that is
+     * told not to count on stacking comes back with a way that digs or walks instead, and a
+     * ban that expires on its own can never write off good ground for ever -- which a list
+     * of positions would, since the usual reason a climb fails is something momentary.
+     */
+    public void banBuilding(int ticks) {
+        this.buildBanUntil = this.level().getGameTime() + ticks;
+    }
+
+    public boolean isBuildingBanned() {
+        return this.level().getGameTime() < this.buildBanUntil;
     }
 
     @Override
