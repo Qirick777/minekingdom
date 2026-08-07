@@ -29,7 +29,10 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.NeutralMob;
+import net.minecraft.world.entity.AgeableMob;
+import net.minecraft.world.entity.EntityDimensions;
 import net.minecraft.world.entity.PathfinderMob;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.SpawnGroupData;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -67,7 +70,7 @@ import java.util.stream.Collectors;
  * <p>Citizens are neutral: they never flee, but fight back whatever hurts
  * them and stay angry for a while afterwards.
  */
-public class CitizenEntity extends PathfinderMob implements InventoryCarrier, NeutralMob {
+public class CitizenEntity extends AgeableMob implements InventoryCarrier, NeutralMob {
     public static final int INVENTORY_SIZE = 8;
 
     private static final EntityDataAccessor<Boolean> DATA_FEMALE =
@@ -140,6 +143,31 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
                 // Not part of createMobAttributes; without it retaliation cannot deal damage.
                 // A held weapon adds its own modifier on top of this.
                 .add(Attributes.ATTACK_DAMAGE, 2.0D);
+    }
+
+    /**
+     * Children are half size, the way every other young mob in the game is. The renderer
+     * needs nothing for this: it sets the model's young flag from isBaby by itself, and the
+     * humanoid model already gives a young figure the big head and the small body.
+     */
+    @Override
+    public EntityDimensions getDimensions(Pose pose) {
+        return super.getDimensions(pose).scale(this.isBaby() ? 0.5F : 1.0F);
+    }
+
+    @Override
+    protected float getStandingEyeHeight(Pose pose, EntityDimensions dimensions) {
+        return this.isBaby() ? 0.81F : 1.62F;
+    }
+
+    /**
+     * Nothing breeds by walking up with wheat. Children come from the birth API, which is
+     * where deciding on a bed for the newborn belongs.
+     */
+    @Nullable
+    @Override
+    public AgeableMob getBreedOffspring(ServerLevel level, AgeableMob partner) {
+        return null;
     }
 
     @Override
@@ -642,7 +670,11 @@ public class CitizenEntity extends PathfinderMob implements InventoryCarrier, Ne
                                         MobSpawnType reason, @Nullable SpawnGroupData spawnData,
                                         @Nullable CompoundTag dataTag) {
         this.setFemale(level.getRandom().nextBoolean());
-        return super.finalizeSpawn(level, difficulty, reason, spawnData, dataTag);
+        SpawnGroupData data = super.finalizeSpawn(level, difficulty, reason, spawnData, dataTag);
+        // Grown, whatever the group data decided: a citizen appears because someone put it
+        // there, and children are meant to come from being born rather than from spawning.
+        this.setAge(0);
+        return data;
     }
 
     @Override

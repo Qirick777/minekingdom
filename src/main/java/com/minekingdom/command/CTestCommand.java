@@ -64,6 +64,17 @@ public final class CTestCommand {
                                 .executes(context -> assign(context, CitizenTask.RETURNING)))
                         .then(Commands.literal("report")
                                 .executes(CTestCommand::report)))
+                // Growing up takes the same twenty minutes it takes every other young mob,
+                // which is far too long to sit through when what is being checked is what
+                // happens on either side of it.
+                .then(Commands.literal("age")
+                        .then(Commands.literal("adult")
+                                .executes(context -> setAge(context, 0)))
+                        .then(Commands.literal("baby")
+                                .executes(context -> setAge(context, -24000)))
+                        .then(Commands.argument("ticks", IntegerArgumentType.integer(-24000, 0))
+                                .executes(context -> setAge(context,
+                                        IntegerArgumentType.getInteger(context, "ticks")))))
                 .then(Commands.literal("debug")
                         .executes(CTestCommand::debug))
                 // What each selected citizen is actually doing about getting somewhere.
@@ -264,6 +275,23 @@ public final class CTestCommand {
             source.sendSuccess(() -> Component.literal(line), false);
         }
         return citizens.size();
+    }
+
+    /** Sets how grown the selection is, so both sides of growing up can be reached at will. */
+    private static int setAge(CommandContext<CommandSourceStack> context, int age) {
+        CommandSourceStack source = context.getSource();
+        List<CitizenEntity> citizens = CitizenSelectionManager.resolve(source);
+        if (citizens.isEmpty()) {
+            source.sendFailure(Component.translatable("commands.minekingdom.ctest.no_selection"));
+            return 0;
+        }
+        for (CitizenEntity citizen : citizens) {
+            citizen.setAge(age);
+        }
+        int count = citizens.size();
+        source.sendSuccess(() -> Component.literal(
+                "Set age to " + age + " for " + count + " citizen(s) (" + (age < 0 ? "baby" : "adult") + ")"), false);
+        return count;
     }
 
     /** What each selected citizen is doing about getting somewhere, straight from the driver. */
